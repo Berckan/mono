@@ -37,14 +37,34 @@ typedef enum {
 static bool g_running = true;
 static AppState g_state = STATE_BROWSER;
 
+// Joystick for input
+static SDL_Joystick *g_joystick = NULL;
+
 /**
  * Initialize SDL2 and all subsystems
  */
 static int init_sdl(void) {
-    // Initialize SDL with video, audio, and events
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_EVENTS) < 0) {
+    // Initialize SDL with video, audio, joystick, and events
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_JOYSTICK | SDL_INIT_EVENTS) < 0) {
         fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
         return -1;
+    }
+
+    // Enable joystick events
+    SDL_JoystickEventState(SDL_ENABLE);
+
+    // Open the first available joystick (TRIMUI Player1)
+    if (SDL_NumJoysticks() > 0) {
+        g_joystick = SDL_JoystickOpen(0);
+        if (g_joystick) {
+            printf("Joystick: %s\n", SDL_JoystickName(g_joystick));
+            printf("Axes: %d, Buttons: %d, Hats: %d\n",
+                   SDL_JoystickNumAxes(g_joystick),
+                   SDL_JoystickNumButtons(g_joystick),
+                   SDL_JoystickNumHats(g_joystick));
+        }
+    } else {
+        printf("No joystick found, using keyboard\n");
     }
 
     // Initialize SDL_ttf for font rendering
@@ -73,6 +93,10 @@ static void cleanup(void) {
     audio_cleanup();
     ui_cleanup();
     browser_cleanup();
+
+    if (g_joystick) {
+        SDL_JoystickClose(g_joystick);
+    }
 
     Mix_CloseAudio();
     TTF_Quit();
@@ -118,6 +142,12 @@ static void handle_input(AppState *state) {
                             g_running = false;
                         }
                         break;
+                    case INPUT_VOL_UP:
+                        audio_set_volume(audio_get_volume() + 5);
+                        break;
+                    case INPUT_VOL_DOWN:
+                        audio_set_volume(audio_get_volume() - 5);
+                        break;
                     default:
                         break;
                 }
@@ -137,6 +167,14 @@ static void handle_input(AppState *state) {
                         break;
                     case INPUT_RIGHT:
                         audio_seek(10);   // Seek forward 10 seconds
+                        break;
+                    case INPUT_UP:
+                        // D-Pad UP = volume up (hardware vol keys captured by system)
+                        audio_set_volume(audio_get_volume() + 5);
+                        break;
+                    case INPUT_DOWN:
+                        // D-Pad DOWN = volume down
+                        audio_set_volume(audio_get_volume() - 5);
                         break;
                     case INPUT_PREV:
                         // Play previous track
@@ -159,6 +197,12 @@ static void handle_input(AppState *state) {
                     case INPUT_MENU:
                         *state = STATE_MENU;
                         break;
+                    case INPUT_VOL_UP:
+                        audio_set_volume(audio_get_volume() + 5);
+                        break;
+                    case INPUT_VOL_DOWN:
+                        audio_set_volume(audio_get_volume() - 5);
+                        break;
                     default:
                         break;
                 }
@@ -169,6 +213,12 @@ static void handle_input(AppState *state) {
                     case INPUT_BACK:
                     case INPUT_MENU:
                         *state = STATE_PLAYING;
+                        break;
+                    case INPUT_VOL_UP:
+                        audio_set_volume(audio_get_volume() + 5);
+                        break;
+                    case INPUT_VOL_DOWN:
+                        audio_set_volume(audio_get_volume() - 5);
                         break;
                     default:
                         break;

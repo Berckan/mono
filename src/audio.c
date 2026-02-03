@@ -154,9 +154,14 @@ bool audio_load(const char *path) {
         strcpy(g_track_info.album, "Unknown Album");
     }
 
-    // Duration unknown without SDL_mixer 2.6+ (Mix_MusicDuration)
-    // We'll estimate based on elapsed time during playback
+    // Try to get duration using SDL_mixer 2.6+ Mix_MusicDuration
     g_track_info.duration_sec = 0;
+#if SDL_MIXER_COMPILEDVERSION >= SDL_VERSIONNUM(2, 6, 0)
+    double duration = Mix_MusicDuration(g_music);
+    if (duration > 0) {
+        g_track_info.duration_sec = (int)duration;
+    }
+#endif
 
     g_track_info.position_sec = 0;
     g_music_position = 0.0;

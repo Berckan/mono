@@ -46,13 +46,20 @@ static const SDL_Color COLOR_HIGHLIGHT = {50, 50, 50, 255};  // Selection bg
  * Load fonts from assets or system
  */
 static int load_fonts(void) {
-    // Try to load custom font first
+    // Try to load font from various locations
     const char *font_paths[] = {
+        // Trimui Brick system fonts
+        "/usr/trimui/res/regular.ttf",
+        "/usr/trimui/res/full.ttf",
+        // Pak-bundled font
         "Mono.pak/assets/fonts/mono.ttf",
         "./assets/fonts/mono.ttf",
+        // Linux system fonts
         "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
         "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
-        "/System/Library/Fonts/Monaco.ttf",  // macOS
+        // macOS (for desktop testing)
+        "/System/Library/Fonts/Monaco.ttf",
+        "/System/Library/Fonts/Supplemental/Menlo.ttc",
         NULL
     };
 
@@ -81,6 +88,12 @@ static int load_fonts(void) {
         fprintf(stderr, "Failed to load fonts: %s\n", TTF_GetError());
         return -1;
     }
+
+    // Use light hinting for smoother text on small LCD screens
+    // TTF_HINTING_LIGHT produces better results than MONO for 320x240
+    TTF_SetFontHinting(g_font_large, TTF_HINTING_LIGHT);
+    TTF_SetFontHinting(g_font_medium, TTF_HINTING_LIGHT);
+    TTF_SetFontHinting(g_font_small, TTF_HINTING_LIGHT);
 
     return 0;
 }
@@ -164,13 +177,19 @@ int ui_init(int width, int height) {
     g_screen_width = width;
     g_screen_height = height;
 
-    // Create window
+    // CRITICAL: Set hints BEFORE creating window/renderer
+    // This ensures linear filtering is applied to all textures
+    SDL_SetHint(SDL_HINT_VIDEO_DOUBLE_BUFFER, "1");
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");  // Linear filtering
+    SDL_SetHint(SDL_HINT_RENDER_BATCHING, "1");       // Batch render calls
+
+    // Create fullscreen window for embedded device
     g_window = SDL_CreateWindow(
         "Mono",
         SDL_WINDOWPOS_UNDEFINED,
         SDL_WINDOWPOS_UNDEFINED,
         width, height,
-        SDL_WINDOW_SHOWN
+        SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_SHOWN
     );
 
     if (!g_window) {
@@ -183,10 +202,18 @@ int ui_init(int width, int height) {
         SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
 
     if (!g_renderer) {
+        // Fallback to software renderer
+        g_renderer = SDL_CreateRenderer(g_window, -1, SDL_RENDERER_SOFTWARE);
+    }
+
+    if (!g_renderer) {
         fprintf(stderr, "Failed to create renderer: %s\n", SDL_GetError());
         SDL_DestroyWindow(g_window);
         return -1;
     }
+
+    // Force logical resolution to 320x240 (will scale to fit screen)
+    SDL_RenderSetLogicalSize(g_renderer, width, height);
 
     // Load fonts
     if (load_fonts() < 0) {
@@ -212,7 +239,7 @@ void ui_render_browser(void) {
     SDL_RenderClear(g_renderer);
 
     // Header
-    render_text("♪ Mono", MARGIN, 4, g_font_medium, COLOR_TEXT);
+    render_text("> Mono", MARGIN, 4, g_font_medium, COLOR_TEXT);
 
     // Draw header separator
     draw_rect(0, HEADER_HEIGHT, g_screen_width, 1, COLOR_DIM);
@@ -236,8 +263,8 @@ void ui_render_browser(void) {
             draw_rect(0, y - 2, g_screen_width, LINE_HEIGHT, COLOR_HIGHLIGHT);
         }
 
-        // Icon prefix
-        const char *prefix = entry->type == ENTRY_DIRECTORY ? "📁 " : "♪ ";
+        // Icon prefix (ASCII-safe for embedded fonts)
+        const char *prefix = entry->type == ENTRY_DIRECTORY ? "[DIR] " : "> ";
 
         // Build display text
         char display[300];
@@ -278,11 +305,11 @@ void ui_render_player(void) {
     const TrackInfo *info = audio_get_track_info();
 
     // Header
-    render_text("♪ Mono", MARGIN, 4, g_font_medium, COLOR_TEXT);
+    render_text("> Mono", MARGIN, 4, g_font_medium, COLOR_TEXT);
 
-    // Play state icon
-    const char *state_icon = audio_is_playing() ? "▶" : (audio_is_paused() ? "❚❚" : "■");
-    render_text(state_icon, g_screen_width - 30, 4, g_font_medium, COLOR_ACCENT);
+    // Play state icon (ASCII-safe)
+    const char *state_icon = audio_is_playing() ? "PLAY" : (audio_is_paused() ? "PAUS" : "STOP");
+    render_text(state_icon, g_screen_width - 45, 4, g_font_medium, COLOR_ACCENT);
 
     draw_rect(0, HEADER_HEIGHT, g_screen_width, 1, COLOR_DIM);
 
@@ -315,7 +342,13 @@ void ui_render_player(void) {
     char time_str[32];
     char pos_str[16], dur_str[16];
     format_time(info->position_sec, pos_str, sizeof(pos_str));
-    format_time(info->duration_sec, dur_str, sizeof(dur_str));
+
+    // Show "--:--" if duration is unknown (Mix_MusicDuration not available)
+    if (info->duration_sec > 0) {
+        format_time(info->duration_sec, dur_str, sizeof(dur_str));
+    } else {
+        snprintf(dur_str, sizeof(dur_str), "--:--");
+    }
     snprintf(time_str, sizeof(time_str), "%s / %s", pos_str, dur_str);
 
     int tw, th;
@@ -325,17 +358,18 @@ void ui_render_player(void) {
     // Footer with controls
     draw_rect(0, g_screen_height - FOOTER_HEIGHT, g_screen_width, 1, COLOR_DIM);
 
-    // Control icons
+    // Control icons (ASCII-safe)
     int ctrl_y = g_screen_height - 18;
-    render_text("L:◀◀", MARGIN, ctrl_y, g_font_small, COLOR_DIM);
-    render_text("A:▶❚❚", 70, ctrl_y, g_font_small, COLOR_DIM);
-    render_text("R:▶▶", 130, ctrl_y, g_font_small, COLOR_DIM);
-    render_text("B:Back", g_screen_width - 55, ctrl_y, g_font_small, COLOR_DIM);
+    render_text("L:Prev", MARGIN, ctrl_y, g_font_small, COLOR_DIM);
+    render_text("A:Play", 55, ctrl_y, g_font_small, COLOR_DIM);
+    render_text("R:Next", 110, ctrl_y, g_font_small, COLOR_DIM);
 
     // Volume indicator
     char vol_str[16];
     snprintf(vol_str, sizeof(vol_str), "Vol:%d%%", audio_get_volume());
-    render_text(vol_str, 200, ctrl_y, g_font_small, COLOR_DIM);
+    render_text(vol_str, 160, ctrl_y, g_font_small, COLOR_DIM);
+
+    render_text("B:Back", g_screen_width - 55, ctrl_y, g_font_small, COLOR_DIM);
 
     SDL_RenderPresent(g_renderer);
 }

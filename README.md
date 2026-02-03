@@ -38,14 +38,24 @@ Copy `Mono.pak/` to `/Tools/tg5040/` on your SD card.
 
 ## Controls
 
-| Button   | Action              |
-| -------- | ------------------- |
-| D-Pad ↑↓ | Navigate            |
-| D-Pad ←→ | Seek ±10s           |
-| A        | Select / Play-Pause |
-| B        | Back / Exit         |
-| L/R      | Prev / Next track   |
-| Start    | Menu                |
+### Browser Mode
+
+| Button   | Action         |
+| -------- | -------------- |
+| D-Pad ↑↓ | Navigate files |
+| A        | Select / Enter |
+| B        | Back / Exit    |
+
+### Player Mode
+
+| Button   | Action            |
+| -------- | ----------------- |
+| D-Pad ↑↓ | Volume ±5%        |
+| D-Pad ←→ | Seek ±10s         |
+| A        | Play / Pause      |
+| B        | Back to browser   |
+| L/R      | Prev / Next track |
+| Start    | Menu              |
 
 ## Project Structure
 
