@@ -154,12 +154,9 @@ bool audio_load(const char *path) {
         strcpy(g_track_info.album, "Unknown Album");
     }
 
-    // Get duration (Mix_MusicDuration is available in SDL_mixer 2.6+)
-#if SDL_MIXER_VERSION_ATLEAST(2, 6, 0)
-    g_track_info.duration_sec = (int)Mix_MusicDuration(g_music);
-#else
-    g_track_info.duration_sec = 0;  // Unknown duration
-#endif
+    // Duration unknown without SDL_mixer 2.6+ (Mix_MusicDuration)
+    // We'll estimate based on elapsed time during playback
+    g_track_info.duration_sec = 0;
 
     g_track_info.position_sec = 0;
     g_music_position = 0.0;
@@ -230,17 +227,11 @@ void audio_seek(int seconds) {
     double new_pos = g_music_position + seconds;
     if (new_pos < 0) new_pos = 0;
 
-#if SDL_MIXER_VERSION_ATLEAST(2, 6, 0)
-    double duration = Mix_MusicDuration(g_music);
-    if (duration > 0 && new_pos >= duration) {
-        new_pos = duration - 1;
-    }
-
+    // Mix_SetMusicPosition works for MP3/OGG in older SDL_mixer
     if (Mix_SetMusicPosition(new_pos) == 0) {
         g_music_position = new_pos;
         g_start_time = SDL_GetTicks() - (Uint32)(new_pos * 1000);
     }
-#endif
 }
 
 void audio_set_volume(int volume) {

@@ -41,24 +41,24 @@ ifeq ($(PLATFORM),)
     endif
 endif
 
-# Trimui Brick (tg5040) cross-compilation
+# Trimui Brick (tg5040) cross-compilation - ARM64
 ifeq ($(PLATFORM),tg5040)
-    TOOLCHAIN ?= /opt/tg5040-toolchain
-    SYSROOT = $(TOOLCHAIN)/arm-buildroot-linux-gnueabihf/sysroot
-    CC = $(TOOLCHAIN)/bin/arm-buildroot-linux-gnueabihf-gcc
-    STRIP = $(TOOLCHAIN)/bin/arm-buildroot-linux-gnueabihf-strip
+    TOOLCHAIN ?= /usr/local/aarch64-linux-gnu-7.5.0-linaro
+    SYSROOT = $(TOOLCHAIN)/sysroot
+    CC = $(TOOLCHAIN)/bin/aarch64-linux-gnu-gcc
+    STRIP = $(TOOLCHAIN)/bin/aarch64-linux-gnu-strip
 
     CFLAGS = $(COMMON_CFLAGS) \
         --sysroot=$(SYSROOT) \
         -I$(SYSROOT)/usr/include/SDL2 \
-        -I$(SYSROOT)/usr/include \
-        -march=armv7-a -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard
+        -I$(SYSROOT)/usr/include
 
     LDFLAGS = $(COMMON_LDFLAGS) \
         --sysroot=$(SYSROOT) \
         -L$(SYSROOT)/usr/lib \
         -Wl,-rpath-link,$(SYSROOT)/usr/lib \
-        -lSDL2 -lSDL2_mixer -lSDL2_ttf
+        -Wl,--no-as-needed \
+        -lSDL2 -lSDL2_mixer -lSDL2_ttf -lpthread -ldl -lm
 endif
 
 # Build rules
@@ -85,9 +85,9 @@ tg5040:
 
 # Docker build (for those without local toolchain)
 docker:
-	docker run --rm -v $(PWD):/src -w /src \
-		ghcr.io/loveretro/tg5040-toolchain:latest \
-		make PLATFORM=tg5040 TOOLCHAIN=/opt/toolchain $(BUILD_DIR)/$(TARGET)
+	docker run --rm --platform linux/amd64 -v $(PWD):/src -w /src \
+		anibaldeboni/trimui-smart-pro-toolchain:latest \
+		make PLATFORM=tg5040 $(BUILD_DIR)/$(TARGET)
 	@mkdir -p $(PAK_DIR)/bin
 	cp $(BUILD_DIR)/$(TARGET) $(PAK_DIR)/bin/
 	@echo "Built $(TARGET) via Docker for Trimui Brick"
