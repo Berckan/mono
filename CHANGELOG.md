@@ -1,5 +1,15 @@
 # Changelog
 
+## [2026.02.04] - v1.2.4
+
+### Fixed
+
+- Fix(Audio): Pause no longer triggers auto-advance to next track
+  WHY: `update()` checked `!audio_is_playing()` which is true when paused.
+  Now also checks `!audio_is_paused()` to distinguish pause from track end.
+
+---
+
 ## [2026.02.04] - v1.2.3
 
 ### Fixed

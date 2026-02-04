@@ -235,8 +235,8 @@ static void handle_input(AppState *state) {
  * Update game state
  */
 static void update(AppState *state) {
-    // Check if current track finished
-    if (*state == STATE_PLAYING && !audio_is_playing()) {
+    // Check if current track finished (not just paused)
+    if (*state == STATE_PLAYING && !audio_is_playing() && !audio_is_paused()) {
         // Auto-advance to next track
         if (browser_move_cursor(1)) {
             const char *path = browser_get_selected_path();
