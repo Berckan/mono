@@ -112,6 +112,18 @@ release: tg5040
 	zip -r $(TARGET)-release.zip $(PAK_DIR)
 	@echo "Created $(TARGET)-release.zip"
 
+# Deploy via SSH (requires .env with TRIMUI_* variables)
+deploy: docker
+	@if [ -f .env ]; then \
+		. ./.env && \
+		cat $(PAK_DIR)/bin/$(TARGET) | sshpass -p "$$TRIMUI_PASS" ssh -o StrictHostKeyChecking=no \
+			$$TRIMUI_USER@$$TRIMUI_HOST "cat > $$TRIMUI_DEPLOY_PATH && chmod +x $$TRIMUI_DEPLOY_PATH" && \
+		echo "✅ Deployed to $$TRIMUI_HOST:$$TRIMUI_DEPLOY_PATH"; \
+	else \
+		echo "❌ .env not found. Copy .env.example to .env and configure."; \
+		exit 1; \
+	fi
+
 # Debug info
 info:
 	@echo "Platform: $(UNAME_S) $(UNAME_M)"
@@ -121,4 +133,4 @@ info:
 	@echo "Sources: $(SOURCES)"
 	@echo "Objects: $(OBJECTS)"
 
-.PHONY: desktop tg5040 docker clean install release info
+.PHONY: desktop tg5040 docker clean install release deploy info

@@ -1,24 +1,21 @@
-# Build output
-build/
-*.o
-*.a
 
-# Binary in pak
-Mono.pak/bin/mono
-
-# Release artifacts
-*.zip
-*.tar.gz
-
-# macOS
-.DS_Store
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# Claude Code
 .claude/
+.DS_Store
+.env
+.idea/
+.vscode/
+*.a
+*.o
+*.swo
+*.swp
+*.tar.gz
+*.zip
+# Binary in pak
+# Build output
+# Claude Code
+# IDE
+# macOS
+# Release artifacts
+build/
 CLAUDE.md
+Mono.pak/bin/mono
