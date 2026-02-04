@@ -16,11 +16,13 @@
 #include <string.h>
 #include <dirent.h>
 #include <stdbool.h>
+#include <time.h>
 
 #include "audio.h"
 #include "ui.h"
 #include "browser.h"
 #include "input.h"
+#include "menu.h"
 
 // Screen dimensions for Trimui Brick
 #define SCREEN_WIDTH  320
@@ -213,6 +215,19 @@ static void handle_input(AppState *state) {
 
             case STATE_MENU:
                 switch (action) {
+                    case INPUT_UP:
+                        menu_move_cursor(-1);
+                        break;
+                    case INPUT_DOWN:
+                        menu_move_cursor(1);
+                        break;
+                    case INPUT_SELECT:
+                        if (menu_select()) {
+                            // Exit selected - stop playback and return to browser
+                            audio_stop();
+                            *state = STATE_BROWSER;
+                        }
+                        break;
                     case INPUT_BACK:
                     case INPUT_MENU:
                         *state = STATE_PLAYING;
@@ -235,17 +250,55 @@ static void handle_input(AppState *state) {
  * Update game state
  */
 static void update(AppState *state) {
+    // Check sleep timer
+    if (*state == STATE_PLAYING || *state == STATE_MENU) {
+        if (menu_update_sleep_timer()) {
+            // Sleep timer expired - stop playback and return to browser
+            audio_stop();
+            *state = STATE_BROWSER;
+            return;
+        }
+    }
+
     // Check if current track finished (not just paused)
     if (*state == STATE_PLAYING && !audio_is_playing() && !audio_is_paused()) {
-        // Auto-advance to next track
-        if (browser_move_cursor(1)) {
+        RepeatMode repeat = menu_get_repeat_mode();
+
+        if (repeat == REPEAT_ONE) {
+            // Repeat current track
             const char *path = browser_get_selected_path();
             if (path && audio_load(path)) {
                 audio_play();
             }
+        } else if (menu_is_shuffle_enabled()) {
+            // Shuffle: play random track
+            int count = browser_get_count();
+            if (count > 0) {
+                int random_offset = rand() % count;
+                browser_move_cursor(random_offset - browser_get_cursor());
+                const char *path = browser_get_selected_path();
+                if (path && audio_load(path)) {
+                    audio_play();
+                }
+            }
         } else {
-            // No more tracks, return to browser
-            *state = STATE_BROWSER;
+            // Normal: advance to next track
+            if (browser_move_cursor(1)) {
+                const char *path = browser_get_selected_path();
+                if (path && audio_load(path)) {
+                    audio_play();
+                }
+            } else if (repeat == REPEAT_ALL) {
+                // At end of list, go back to start
+                browser_move_cursor(-browser_get_cursor());
+                const char *path = browser_get_selected_path();
+                if (path && audio_load(path)) {
+                    audio_play();
+                }
+            } else {
+                // No more tracks, return to browser
+                *state = STATE_BROWSER;
+            }
         }
     }
 
@@ -310,6 +363,12 @@ int main(int argc, char *argv[]) {
         cleanup();
         return 1;
     }
+
+    // Initialize menu system
+    menu_init();
+
+    // Seed random number generator for shuffle
+    srand((unsigned int)time(NULL));
 
     printf("Mono - Initialized successfully\n");
 

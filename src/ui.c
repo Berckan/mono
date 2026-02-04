@@ -8,6 +8,7 @@
 #include "ui.h"
 #include "browser.h"
 #include "audio.h"
+#include "menu.h"
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
 #include <stdio.h>
@@ -385,22 +386,62 @@ void ui_render_menu(void) {
     SDL_RenderFillRect(g_renderer, &overlay);
 
     // Menu box
-    int menu_w = 200;
-    int menu_h = 120;
+    int menu_w = 220;
+    int menu_h = 160;
     int menu_x = (g_screen_width - menu_w) / 2;
     int menu_y = (g_screen_height - menu_h) / 2;
 
     draw_rect(menu_x, menu_y, menu_w, menu_h, COLOR_HIGHLIGHT);
 
     // Menu title
-    render_text_centered("Options", menu_y + 10, g_font_medium, COLOR_TEXT);
+    render_text_centered("Options", menu_y + 8, g_font_medium, COLOR_TEXT);
 
     // Menu items
-    render_text("Shuffle: Off", menu_x + 20, menu_y + 40, g_font_small, COLOR_DIM);
-    render_text("Repeat: Off", menu_x + 20, menu_y + 60, g_font_small, COLOR_DIM);
+    int cursor = menu_get_cursor();
+    int item_y = menu_y + 35;
+    int item_h = 22;
+    char buf[64];
 
-    // Close hint
-    render_text("B: Close", menu_x + 20, menu_y + 90, g_font_small, COLOR_ACCENT);
+    // Shuffle
+    snprintf(buf, sizeof(buf), "Shuffle: %s", menu_is_shuffle_enabled() ? "On" : "Off");
+    if (cursor == MENU_SHUFFLE) {
+        draw_rect(menu_x + 8, item_y - 2, menu_w - 16, item_h, COLOR_ACCENT);
+        render_text(buf, menu_x + 16, item_y, g_font_small, COLOR_BG);
+    } else {
+        render_text(buf, menu_x + 16, item_y, g_font_small, COLOR_DIM);
+    }
+    item_y += item_h;
+
+    // Repeat
+    snprintf(buf, sizeof(buf), "Repeat: %s", menu_get_repeat_string());
+    if (cursor == MENU_REPEAT) {
+        draw_rect(menu_x + 8, item_y - 2, menu_w - 16, item_h, COLOR_ACCENT);
+        render_text(buf, menu_x + 16, item_y, g_font_small, COLOR_BG);
+    } else {
+        render_text(buf, menu_x + 16, item_y, g_font_small, COLOR_DIM);
+    }
+    item_y += item_h;
+
+    // Sleep Timer
+    snprintf(buf, sizeof(buf), "Sleep: %s", menu_get_sleep_string());
+    if (cursor == MENU_SLEEP) {
+        draw_rect(menu_x + 8, item_y - 2, menu_w - 16, item_h, COLOR_ACCENT);
+        render_text(buf, menu_x + 16, item_y, g_font_small, COLOR_BG);
+    } else {
+        render_text(buf, menu_x + 16, item_y, g_font_small, COLOR_DIM);
+    }
+    item_y += item_h;
+
+    // Exit
+    if (cursor == MENU_EXIT) {
+        draw_rect(menu_x + 8, item_y - 2, menu_w - 16, item_h, COLOR_ACCENT);
+        render_text("Exit to Browser", menu_x + 16, item_y, g_font_small, COLOR_BG);
+    } else {
+        render_text("Exit to Browser", menu_x + 16, item_y, g_font_small, COLOR_DIM);
+    }
+
+    // Controls hint
+    render_text_centered("A:Select  X:Close", menu_y + menu_h - 18, g_font_small, COLOR_DIM);
 
     SDL_RenderPresent(g_renderer);
 }

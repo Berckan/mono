@@ -1,5 +1,23 @@
 # Changelog
 
+## [2026.02.04] - v1.3.0
+
+### Added
+
+- Feat(Menu): Fully interactive options menu (Start button)
+  - **Shuffle**: On/Off - play tracks in random order
+  - **Repeat**: Off/One/All - repeat modes
+  - **Sleep Timer**: Off/15/30/60 minutes - auto-stop playback
+  - **Exit**: Return to browser and stop playback
+    WHY: Users need control over playback behavior without exiting the player.
+
+### Changed
+
+- Changed(Audio): Auto-advance now respects Shuffle and Repeat settings
+  WHY: Menu options need to affect playback behavior.
+
+---
+
 ## [2026.02.04] - v1.2.4
 
 ### Fixed
