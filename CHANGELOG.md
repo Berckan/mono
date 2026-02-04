@@ -1,5 +1,22 @@
 # Changelog
 
+## [2026.02.04] - v1.2.1
+
+### Fixed
+
+- Fix(Input): Migrated from raw SDL Joystick API to SDL Game Controller API
+  WHY: Raw joystick button indices are device-specific (A button = 0 on some devices,
+  different on others). Game Controller API uses gamecontrollerdb.txt to map physical
+  buttons to standardized constants (SDL_CONTROLLER_BUTTON_A, etc.), ensuring consistent
+  behavior across different hardware.
+
+### Changed
+
+- Changed(Input): Keep raw joystick as fallback for devices without gamecontrollerdb mapping
+  WHY: Some devices may not have entries in the controller database
+
+---
+
 ## [2026.02.04] - v1.2.0
 
 ### Fixed
