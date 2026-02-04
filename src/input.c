@@ -4,18 +4,14 @@
  * Maps keyboard/gamepad inputs to abstract actions.
  * Supports both desktop testing (keyboard) and Trimui Brick hardware.
  *
- * Uses raw SDL Joystick API (not Game Controller API) because Trimui Brick's
- * "TRIMUI Player1" has an incorrect mapping in SDL's gamecontrollerdb.
- *
- * Trimui Brick Button Mapping (raw joystick indices):
- * - 0: A button (south) - confirm/select
- * - 1: X button (west) - back (B is captured by system)
- * - 3: Y button (north)
- * - 4: L shoulder - previous track
- * - 5: R shoulder - next track
- * - 6: Select - shuffle
- * - 7: Start - menu
- * - D-Pad: Hat events for navigation/seek/volume
+ * Trimui Brick Button Mapping (from NextUI platform.h):
+ * - JOY_A = 1 (south button - confirm/select)
+ * - JOY_B = 0 (east button - captured by system for launcher)
+ * - JOY_X = 3 (west button - back, since B is captured)
+ * - JOY_Y = 2 (north button)
+ * - JOY_L1 = 4, JOY_R1 = 5 (shoulder buttons)
+ * - JOY_SELECT = 6, JOY_START = 7
+ * - JOY_MENU = 8
  */
 
 #include "input.h"
@@ -34,14 +30,17 @@
 #define KEY_START   SDLK_RETURN  // Start
 #define KEY_SELECT  SDLK_RSHIFT  // Select
 
-// Gamepad button indices for raw joystick fallback (device-specific!)
-// These are only used when SDL_GameController mapping is not available
-#define BTN_A       0
-#define BTN_B       1
-#define BTN_L       4
-#define BTN_R       5
-#define BTN_SELECT  6
-#define BTN_START   7
+// Trimui Brick joystick button indices (from NextUI platform.h)
+// These match the official NextUI mapping for tg5040 platform
+#define JOY_A       1   // South button (confirm)
+#define JOY_B       0   // East button (captured by system)
+#define JOY_X       3   // West button (back)
+#define JOY_Y       2   // North button
+#define JOY_L1      4   // Left shoulder
+#define JOY_R1      5   // Right shoulder
+#define JOY_SELECT  6
+#define JOY_START   7
+#define JOY_MENU    8
 
 // Button state tracking for debouncing (gamepad doesn't filter repeats like keyboard)
 static Uint8 g_button_state[16] = {0};
@@ -85,16 +84,17 @@ InputAction input_handle_event(const SDL_Event *event) {
             }
             if (btn < 16) g_button_state[btn] = 1;
 
-            // TRIMUI Brick button indices (confirmed via hardware testing)
-            // A=0, X=1, Y=3, L=4, R=5, Select=6, Start=7
-            // Note: B button (index 2) is captured by system for "back to launcher"
+            // TRIMUI Brick button mapping (from NextUI platform.h)
+            // Note: JOY_B (index 0) is captured by system for "back to launcher"
             switch (btn) {
-                case 0:  return INPUT_SELECT;   // A button (south)
-                case 1:  return INPUT_BACK;     // X button (west, since B is system)
-                case 4:  return INPUT_PREV;     // L
-                case 5:  return INPUT_NEXT;     // R
-                case 7:  return INPUT_MENU;     // Start
-                case 6:  return INPUT_SHUFFLE;  // Select
+                case JOY_A:      return INPUT_SELECT;   // A - confirm/play-pause
+                case JOY_X:      return INPUT_BACK;     // X - back (B captured by system)
+                case JOY_Y:      return INPUT_SHUFFLE;  // Y - shuffle toggle
+                case JOY_L1:     return INPUT_PREV;     // L1 - previous track
+                case JOY_R1:     return INPUT_NEXT;     // R1 - next track
+                case JOY_SELECT: return INPUT_SHUFFLE;  // Select - also shuffle
+                case JOY_START:  return INPUT_MENU;     // Start - menu
+                case JOY_MENU:   return INPUT_MENU;     // Menu button
                 default: break;
             }
             break;

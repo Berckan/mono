@@ -1,12 +1,21 @@
 # Changelog
 
+## [2026.02.04] - v1.2.3
+
+### Fixed
+
+- Fix(Input): Use correct button indices from NextUI platform.h
+  WHY: Was guessing button indices (A=0, X=1). Official NextUI mapping is:
+  JOY_A=1, JOY_B=0, JOY_X=3, JOY_Y=2. Now matches other NextUI apps.
+
+---
+
 ## [2026.02.04] - v1.2.2
 
 ### Fixed
 
 - Fix(Input): Revert to raw SDL Joystick API (remove Game Controller API)
-  WHY: SDL's gamecontrollerdb has incorrect mapping for "TRIMUI Player1" - buttons
-  were shifted (A→Start, B→A, X→B). Raw joystick indices are correct for this device.
+  WHY: SDL's gamecontrollerdb has incorrect mapping for "TRIMUI Player1".
 
 ---
 
