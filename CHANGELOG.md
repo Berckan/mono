@@ -1,19 +1,22 @@
 # Changelog
 
+## [2026.02.04] - v1.2.2
+
+### Fixed
+
+- Fix(Input): Revert to raw SDL Joystick API (remove Game Controller API)
+  WHY: SDL's gamecontrollerdb has incorrect mapping for "TRIMUI Player1" - buttons
+  were shifted (A→Start, B→A, X→B). Raw joystick indices are correct for this device.
+
+---
+
 ## [2026.02.04] - v1.2.1
 
 ### Fixed
 
-- Fix(Input): Migrated from raw SDL Joystick API to SDL Game Controller API
-  WHY: Raw joystick button indices are device-specific (A button = 0 on some devices,
-  different on others). Game Controller API uses gamecontrollerdb.txt to map physical
-  buttons to standardized constants (SDL_CONTROLLER_BUTTON_A, etc.), ensuring consistent
-  behavior across different hardware.
-
-### Changed
-
-- Changed(Input): Keep raw joystick as fallback for devices without gamecontrollerdb mapping
-  WHY: Some devices may not have entries in the controller database
+- Fix(Input): Attempted migration to SDL Game Controller API (reverted in v1.2.2)
+  WHY: Theory was that raw joystick indices are device-specific, but in practice
+  the Game Controller mapping was worse than raw indices for Trimui Brick.
 
 ---
 

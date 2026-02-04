@@ -37,18 +37,15 @@ typedef enum {
 static bool g_running = true;
 static AppState g_state = STATE_BROWSER;
 
-// Controller/Joystick for input
-// Prefer Game Controller API (standardized button mapping)
-// Fall back to raw joystick if no mapping available
-static SDL_GameController *g_controller = NULL;
+// Joystick for input (raw joystick API - Trimui has incorrect Game Controller mapping)
 static SDL_Joystick *g_joystick = NULL;
 
 /**
  * Initialize SDL2 and all subsystems
  */
 static int init_sdl(void) {
-    // Initialize SDL with video, audio, joystick, game controller, and events
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS) < 0) {
+    // Initialize SDL with video, audio, joystick, and events
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_JOYSTICK | SDL_INIT_EVENTS) < 0) {
         fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
         return -1;
     }
@@ -56,25 +53,18 @@ static int init_sdl(void) {
     // Enable joystick events (needed for both joystick and game controller)
     SDL_JoystickEventState(SDL_ENABLE);
 
-    // Try to open as Game Controller first (standardized button mapping)
-    // Falls back to raw joystick if no mapping available in gamecontrollerdb.txt
+    // Open joystick - use raw joystick API for Trimui Brick
+    // Note: SDL Game Controller API has incorrect mapping for "TRIMUI Player1",
+    // so we force raw joystick mode which has correct button indices.
     if (SDL_NumJoysticks() > 0) {
-        if (SDL_IsGameController(0)) {
-            g_controller = SDL_GameControllerOpen(0);
-            if (g_controller) {
-                printf("Controller: %s\n", SDL_GameControllerName(g_controller));
-                printf("Mapping: %s\n", SDL_GameControllerMapping(g_controller));
-            }
-        } else {
-            // Fallback to raw joystick (device-specific button indices)
-            g_joystick = SDL_JoystickOpen(0);
-            if (g_joystick) {
-                printf("Joystick (no mapping): %s\n", SDL_JoystickName(g_joystick));
-                printf("Axes: %d, Buttons: %d, Hats: %d\n",
-                       SDL_JoystickNumAxes(g_joystick),
-                       SDL_JoystickNumButtons(g_joystick),
-                       SDL_JoystickNumHats(g_joystick));
-            }
+        g_joystick = SDL_JoystickOpen(0);
+        if (g_joystick) {
+            const char *name = SDL_JoystickName(g_joystick);
+            printf("Joystick: %s\n", name);
+            printf("Axes: %d, Buttons: %d, Hats: %d\n",
+                   SDL_JoystickNumAxes(g_joystick),
+                   SDL_JoystickNumButtons(g_joystick),
+                   SDL_JoystickNumHats(g_joystick));
         }
     } else {
         printf("No joystick found, using keyboard\n");
@@ -107,9 +97,6 @@ static void cleanup(void) {
     ui_cleanup();
     browser_cleanup();
 
-    if (g_controller) {
-        SDL_GameControllerClose(g_controller);
-    }
     if (g_joystick) {
         SDL_JoystickClose(g_joystick);
     }

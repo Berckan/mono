@@ -4,18 +4,18 @@
  * Maps keyboard/gamepad inputs to abstract actions.
  * Supports both desktop testing (keyboard) and Trimui Brick hardware.
  *
- * Uses SDL Game Controller API for standardized button mapping.
- * Falls back to raw joystick API if device has no mapping in gamecontrollerdb.txt.
+ * Uses raw SDL Joystick API (not Game Controller API) because Trimui Brick's
+ * "TRIMUI Player1" has an incorrect mapping in SDL's gamecontrollerdb.
  *
- * Game Controller Button Mapping (standardized):
- * - A: South button (confirm/select)
- * - B: East button (back) - captured by system on Trimui, use X as backup
- * - X: West button (backup back)
- * - Y: North button
- * - L/R: Shoulder buttons (prev/next track)
- * - Start: Options/menu
- * - Back/Select: Shuffle
- * - D-Pad: Navigation/seek/volume
+ * Trimui Brick Button Mapping (raw joystick indices):
+ * - 0: A button (south) - confirm/select
+ * - 1: X button (west) - back (B is captured by system)
+ * - 3: Y button (north)
+ * - 4: L shoulder - previous track
+ * - 5: R shoulder - next track
+ * - 6: Select - shuffle
+ * - 7: Start - menu
+ * - D-Pad: Hat events for navigation/seek/volume
  */
 
 #include "input.h"
@@ -73,34 +73,7 @@ InputAction input_handle_event(const SDL_Event *event) {
             }
             break;
 
-        // SDL Game Controller API - standardized button mapping
-        case SDL_CONTROLLERBUTTONDOWN: {
-            printf("[CTRL] button=%d (%s)\n", event->cbutton.button,
-                   SDL_GameControllerGetStringForButton(event->cbutton.button));
-            fflush(stdout);
-
-            switch (event->cbutton.button) {
-                case SDL_CONTROLLER_BUTTON_A:             return INPUT_SELECT;   // A = confirm/play-pause
-                case SDL_CONTROLLER_BUTTON_B:             return INPUT_BACK;     // B = back (may be captured by system)
-                case SDL_CONTROLLER_BUTTON_X:             return INPUT_BACK;     // X = backup back
-                case SDL_CONTROLLER_BUTTON_LEFTSHOULDER:  return INPUT_PREV;     // L = previous track
-                case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER: return INPUT_NEXT;     // R = next track
-                case SDL_CONTROLLER_BUTTON_START:         return INPUT_MENU;     // Start = menu
-                case SDL_CONTROLLER_BUTTON_BACK:          return INPUT_SHUFFLE;  // Select/Back = shuffle
-                case SDL_CONTROLLER_BUTTON_DPAD_UP:       return INPUT_UP;
-                case SDL_CONTROLLER_BUTTON_DPAD_DOWN:     return INPUT_DOWN;
-                case SDL_CONTROLLER_BUTTON_DPAD_LEFT:     return INPUT_LEFT;
-                case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:    return INPUT_RIGHT;
-                default: break;
-            }
-            break;
-        }
-
-        case SDL_CONTROLLERBUTTONUP:
-            // Controller button released - no action needed
-            return INPUT_NONE;
-
-        // Raw Joystick API - fallback for devices without gamecontrollerdb mapping
+        // Raw Joystick API - used for Trimui Brick (Game Controller mapping is incorrect)
         case SDL_JOYBUTTONDOWN: {
             int btn = event->jbutton.button;
             printf("[BTN] button=%d\n", btn);
@@ -112,9 +85,9 @@ InputAction input_handle_event(const SDL_Event *event) {
             }
             if (btn < 16) g_button_state[btn] = 1;
 
-            // FALLBACK: Raw joystick mapping (device-specific indices!)
-            // Only used if Game Controller API mapping unavailable
-            // TRIMUI Brick raw: A=0, X=1, Y=3, L=4, R=5, Select=6, Start=7
+            // TRIMUI Brick button indices (confirmed via hardware testing)
+            // A=0, X=1, Y=3, L=4, R=5, Select=6, Start=7
+            // Note: B button (index 2) is captured by system for "back to launcher"
             switch (btn) {
                 case 0:  return INPUT_SELECT;   // A button (south)
                 case 1:  return INPUT_BACK;     // X button (west, since B is system)
