@@ -92,4 +92,17 @@ const char* browser_get_current_path(void);
  */
 int browser_get_scroll_offset(void);
 
+/**
+ * Set cursor position directly (for state restoration)
+ * @param pos New cursor position
+ */
+void browser_set_cursor(int pos);
+
+/**
+ * Navigate to a specific directory
+ * @param path Directory path to navigate to
+ * @return 0 on success, -1 on failure
+ */
+int browser_navigate_to(const char *path);
+
 #endif // BROWSER_H

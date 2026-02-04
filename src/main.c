@@ -23,21 +23,29 @@
 #include "browser.h"
 #include "input.h"
 #include "menu.h"
+#include "state.h"
+#include "favorites.h"
+#include "screen.h"
 
-// Screen dimensions for Trimui Brick
-#define SCREEN_WIDTH  320
-#define SCREEN_HEIGHT 240
+// Screen dimensions (auto-detected at runtime)
+static int g_screen_width = 1280;   // Fallback
+static int g_screen_height = 720;   // Fallback
 
 // Application states
 typedef enum {
     STATE_BROWSER,
     STATE_PLAYING,
-    STATE_MENU
+    STATE_MENU,
+    STATE_HELP_BROWSER,
+    STATE_HELP_PLAYER
 } AppState;
 
 // Global state
 static bool g_running = true;
 static AppState g_state = STATE_BROWSER;
+
+// Currently playing track path (for state persistence)
+static char g_current_track_path[512] = {0};
 
 // Joystick for input (raw joystick API - Trimui has incorrect Game Controller mapping)
 static SDL_Joystick *g_joystick = NULL;
@@ -80,7 +88,7 @@ static int init_sdl(void) {
     }
 
     // Initialize SDL_mixer for audio playback
-    // 44100 Hz, signed 16-bit, stereo, 2048 sample buffer
+    // 44100 Hz (CD quality), signed 16-bit, stereo, 2048 sample buffer
     if (Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 2048) < 0) {
         fprintf(stderr, "Mix_OpenAudio failed: %s\n", Mix_GetError());
         TTF_Quit();
@@ -92,9 +100,52 @@ static int init_sdl(void) {
 }
 
 /**
+ * Save current application state before exit
+ */
+static void save_app_state(void) {
+    AppStateData state_data = {0};
+
+    // Copy current track path
+    if (g_current_track_path[0]) {
+        strncpy(state_data.last_file, g_current_track_path, sizeof(state_data.last_file) - 1);
+    }
+
+    // Copy current folder
+    const char *folder = browser_get_current_path();
+    if (folder) {
+        strncpy(state_data.last_folder, folder, sizeof(state_data.last_folder) - 1);
+    }
+
+    // Get playback position
+    const TrackInfo *info = audio_get_track_info();
+    state_data.last_position = info ? info->position_sec : 0;
+
+    // Get browser cursor
+    state_data.last_cursor = browser_get_cursor();
+
+    // Get user preferences
+    state_data.volume = audio_get_volume();
+    state_data.shuffle = menu_is_shuffle_enabled();
+    state_data.repeat = menu_get_repeat_mode();
+
+    // Was playing?
+    state_data.was_playing = audio_is_playing() || audio_is_paused();
+
+    state_save(&state_data);
+}
+
+/**
  * Cleanup all SDL resources
  */
 static void cleanup(void) {
+    // Save state before cleanup
+    save_app_state();
+
+    // Save favorites and restore screen
+    favorites_cleanup();
+    state_cleanup();
+    screen_cleanup();
+
     audio_cleanup();
     ui_cleanup();
     browser_cleanup();
@@ -111,8 +162,23 @@ static void cleanup(void) {
 /**
  * Handle input events based on current state
  */
+// Track previous state for returning from help
+static AppState g_prev_state = STATE_BROWSER;
+
 static void handle_input(AppState *state) {
     SDL_Event event;
+
+    // Poll for hold actions (Y button hold detection)
+    InputAction hold_action = input_poll_holds();
+    if (hold_action == INPUT_HELP) {
+        if (*state == STATE_BROWSER) {
+            g_prev_state = STATE_BROWSER;
+            *state = STATE_HELP_BROWSER;
+        } else if (*state == STATE_PLAYING) {
+            g_prev_state = STATE_PLAYING;
+            *state = STATE_HELP_PLAYER;
+        }
+    }
 
     while (SDL_PollEvent(&event)) {
         if (event.type == SDL_QUIT) {
@@ -121,6 +187,15 @@ static void handle_input(AppState *state) {
         }
 
         InputAction action = input_handle_event(&event);
+
+        // Help overlay dismissal (Y released)
+        if (*state == STATE_HELP_BROWSER || *state == STATE_HELP_PLAYER) {
+            // Any button release returns to previous state
+            if (event.type == SDL_JOYBUTTONUP || event.type == SDL_KEYUP) {
+                *state = g_prev_state;
+            }
+            continue;  // Don't process other actions while in help
+        }
 
         switch (*state) {
             case STATE_BROWSER:
@@ -136,6 +211,8 @@ static void handle_input(AppState *state) {
                             // File selected, start playing
                             const char *path = browser_get_selected_path();
                             if (path && audio_load(path)) {
+                                // Store current track path for state persistence
+                                strncpy(g_current_track_path, path, sizeof(g_current_track_path) - 1);
                                 audio_play();
                                 *state = STATE_PLAYING;
                             }
@@ -147,11 +224,26 @@ static void handle_input(AppState *state) {
                             g_running = false;
                         }
                         break;
+                    case INPUT_FAVORITE: {
+                        // Toggle favorite for selected file
+                        const char *path = browser_get_selected_path();
+                        const FileEntry *entry = browser_get_entry(browser_get_cursor());
+                        if (path && entry && entry->type == ENTRY_FILE) {
+                            bool is_now_fav = favorites_toggle(path);
+                            printf("[MAIN] %s %s favorites\n", path,
+                                   is_now_fav ? "added to" : "removed from");
+                        }
+                        break;
+                    }
                     case INPUT_VOL_UP:
                         audio_set_volume(audio_get_volume() + 5);
                         break;
                     case INPUT_VOL_DOWN:
                         audio_set_volume(audio_get_volume() - 5);
+                        break;
+                    case INPUT_HELP:
+                        g_prev_state = STATE_BROWSER;
+                        *state = STATE_HELP_BROWSER;
                         break;
                     default:
                         break;
@@ -159,12 +251,23 @@ static void handle_input(AppState *state) {
                 break;
 
             case STATE_PLAYING:
+                // Restore screen brightness on any input (if dimmed)
+                // Exception: INPUT_SHUFFLE (SELECT button) toggles dim
+                if (action != INPUT_NONE && action != INPUT_SHUFFLE && screen_is_dimmed()) {
+                    screen_restore();
+                }
+
                 switch (action) {
                     case INPUT_SELECT:
                         audio_toggle_pause();
                         break;
+                    case INPUT_SHUFFLE:
+                        // In player mode, SELECT = screen dim toggle
+                        screen_toggle_dim();
+                        break;
                     case INPUT_BACK:
                         audio_stop();
+                        g_current_track_path[0] = '\0';  // Clear current track
                         *state = STATE_BROWSER;
                         break;
                     case INPUT_LEFT:
@@ -186,6 +289,7 @@ static void handle_input(AppState *state) {
                         if (browser_move_cursor(-1)) {
                             const char *path = browser_get_selected_path();
                             if (path && audio_load(path)) {
+                                strncpy(g_current_track_path, path, sizeof(g_current_track_path) - 1);
                                 audio_play();
                             }
                         }
@@ -195,8 +299,17 @@ static void handle_input(AppState *state) {
                         if (browser_move_cursor(1)) {
                             const char *path = browser_get_selected_path();
                             if (path && audio_load(path)) {
+                                strncpy(g_current_track_path, path, sizeof(g_current_track_path) - 1);
                                 audio_play();
                             }
+                        }
+                        break;
+                    case INPUT_FAVORITE:
+                        // Toggle favorite for current track
+                        if (g_current_track_path[0]) {
+                            bool is_now_fav = favorites_toggle(g_current_track_path);
+                            printf("[MAIN] %s %s favorites\n", g_current_track_path,
+                                   is_now_fav ? "added to" : "removed from");
                         }
                         break;
                     case INPUT_MENU:
@@ -207,6 +320,10 @@ static void handle_input(AppState *state) {
                         break;
                     case INPUT_VOL_DOWN:
                         audio_set_volume(audio_get_volume() - 5);
+                        break;
+                    case INPUT_HELP:
+                        g_prev_state = STATE_PLAYING;
+                        *state = STATE_HELP_PLAYER;
                         break;
                     default:
                         break;
@@ -229,7 +346,7 @@ static void handle_input(AppState *state) {
                         }
                         break;
                     case INPUT_BACK:
-                    case INPUT_MENU:
+                        // Only X closes menu (Start was causing rapid open/close)
                         *state = STATE_PLAYING;
                         break;
                     case INPUT_VOL_UP:
@@ -241,6 +358,11 @@ static void handle_input(AppState *state) {
                     default:
                         break;
                 }
+                break;
+
+            case STATE_HELP_BROWSER:
+            case STATE_HELP_PLAYER:
+                // Handled above with continue statement
                 break;
         }
     }
@@ -268,6 +390,7 @@ static void update(AppState *state) {
             // Repeat current track
             const char *path = browser_get_selected_path();
             if (path && audio_load(path)) {
+                strncpy(g_current_track_path, path, sizeof(g_current_track_path) - 1);
                 audio_play();
             }
         } else if (menu_is_shuffle_enabled()) {
@@ -278,6 +401,7 @@ static void update(AppState *state) {
                 browser_move_cursor(random_offset - browser_get_cursor());
                 const char *path = browser_get_selected_path();
                 if (path && audio_load(path)) {
+                    strncpy(g_current_track_path, path, sizeof(g_current_track_path) - 1);
                     audio_play();
                 }
             }
@@ -286,6 +410,7 @@ static void update(AppState *state) {
             if (browser_move_cursor(1)) {
                 const char *path = browser_get_selected_path();
                 if (path && audio_load(path)) {
+                    strncpy(g_current_track_path, path, sizeof(g_current_track_path) - 1);
                     audio_play();
                 }
             } else if (repeat == REPEAT_ALL) {
@@ -293,10 +418,12 @@ static void update(AppState *state) {
                 browser_move_cursor(-browser_get_cursor());
                 const char *path = browser_get_selected_path();
                 if (path && audio_load(path)) {
+                    strncpy(g_current_track_path, path, sizeof(g_current_track_path) - 1);
                     audio_play();
                 }
             } else {
                 // No more tracks, return to browser
+                g_current_track_path[0] = '\0';
                 *state = STATE_BROWSER;
             }
         }
@@ -320,6 +447,12 @@ static void render(AppState *state) {
         case STATE_MENU:
             ui_render_menu();
             break;
+        case STATE_HELP_BROWSER:
+            ui_render_help_browser();
+            break;
+        case STATE_HELP_PLAYER:
+            ui_render_help_player();
+            break;
     }
 }
 
@@ -338,7 +471,17 @@ int main(int argc, char *argv[]) {
     }
 
     // Initialize UI
-    if (ui_init(SCREEN_WIDTH, SCREEN_HEIGHT) < 0) {
+    // Auto-detect screen dimensions
+    SDL_DisplayMode mode;
+    if (SDL_GetCurrentDisplayMode(0, &mode) == 0) {
+        g_screen_width = mode.w;
+        g_screen_height = mode.h;
+        printf("[MAIN] Detected display: %dx%d\n", g_screen_width, g_screen_height);
+    } else {
+        printf("[MAIN] Using fallback display: %dx%d\n", g_screen_width, g_screen_height);
+    }
+
+    if (ui_init(g_screen_width, g_screen_height) < 0) {
         fprintf(stderr, "UI initialization failed\n");
         cleanup();
         return 1;
@@ -366,6 +509,67 @@ int main(int argc, char *argv[]) {
 
     // Initialize menu system
     menu_init();
+
+    // Initialize state persistence
+    if (state_init() < 0) {
+        fprintf(stderr, "State initialization failed (non-fatal)\n");
+    }
+
+    // Initialize favorites
+    if (favorites_init() < 0) {
+        fprintf(stderr, "Favorites initialization failed (non-fatal)\n");
+    }
+
+    // Initialize screen brightness control
+    if (screen_init() < 0) {
+        fprintf(stderr, "Screen control initialization failed (non-fatal)\n");
+    }
+
+    // Try to restore previous state
+    AppStateData saved_state;
+    if (state_load(&saved_state)) {
+        // Restore user preferences
+        audio_set_volume(saved_state.volume);
+        menu_set_shuffle(saved_state.shuffle);
+        menu_set_repeat(saved_state.repeat);
+
+        // Try to resume playback if there was an active track
+        if (saved_state.has_resume_data && saved_state.last_file[0]) {
+            // Navigate to the folder containing the last track
+            if (saved_state.last_folder[0]) {
+                browser_navigate_to(saved_state.last_folder);
+            }
+
+            // Find and select the track
+            int count = browser_get_count();
+            for (int i = 0; i < count; i++) {
+                const FileEntry *entry = browser_get_entry(i);
+                if (entry && strcmp(entry->full_path, saved_state.last_file) == 0) {
+                    browser_set_cursor(i);
+                    break;
+                }
+            }
+
+            // Auto-resume if was playing
+            if (saved_state.was_playing) {
+                const char *path = browser_get_selected_path();
+                if (path && audio_load(path)) {
+                    strncpy(g_current_track_path, path, sizeof(g_current_track_path) - 1);
+
+                    // Seek to saved position
+                    if (saved_state.last_position > 0) {
+                        audio_play();
+                        audio_seek(saved_state.last_position);
+                    } else {
+                        audio_play();
+                    }
+                    g_state = STATE_PLAYING;
+                    printf("[MAIN] Resumed playback: %s @ %ds\n",
+                           path, saved_state.last_position);
+                }
+            }
+        }
+    }
 
     // Seed random number generator for shuffle
     srand((unsigned int)time(NULL));

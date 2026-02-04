@@ -119,3 +119,13 @@ const char* menu_get_sleep_string(void) {
     snprintf(buf, sizeof(buf), "%d min", remaining);
     return buf;
 }
+
+void menu_set_shuffle(bool enabled) {
+    g_shuffle = enabled;
+    printf("[MENU] Shuffle set to: %s\n", g_shuffle ? "ON" : "OFF");
+}
+
+void menu_set_repeat(RepeatMode mode) {
+    g_repeat = mode;
+    printf("[MENU] Repeat set to: %s\n", menu_get_repeat_string());
+}

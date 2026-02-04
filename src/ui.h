@@ -33,4 +33,14 @@ void ui_render_player(void);
  */
 void ui_render_menu(void);
 
+/**
+ * Render help overlay for browser mode
+ */
+void ui_render_help_browser(void);
+
+/**
+ * Render help overlay for player mode
+ */
+void ui_render_help_player(void);
+
 #endif // UI_H

@@ -1,0 +1,15 @@
+{
+  "name": "Mono",
+  "version": "v1.5.0",
+  "type": "TOOL",
+  "description": "Minimalist music player. Clean UI, favorites, state persistence.",
+  "author": "berckan",
+  "platforms": ["tg5040"],
+  "features": [
+    "File browser with folder navigation",
+    "Favorites system (Y button)",
+    "Resume playback on restart",
+    "Shuffle, repeat, sleep timer",
+    "Screen dimming for battery save"
+  ]
+}

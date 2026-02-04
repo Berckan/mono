@@ -1,5 +1,72 @@
 # Changelog
 
+## [2026.02.04] - v1.5.0
+
+### Added
+
+- Feat(Screen): Screen dimming with SELECT button in player mode
+  WHY: Battery saving during long playback sessions without turning off display completely.
+
+- Feat(UI): Help overlay with Y button hold (300ms)
+  WHY: Users need quick reference for controls without leaving the app.
+
+- Feat(Launcher): Power-optimized launch.sh with CPU governor control
+  WHY: Audio workload doesn't need full CPU speed, saves battery at 1.2GHz.
+
+- Feat(Metadata): pak.json for NextUI app registry
+  WHY: Standard metadata format for app stores and launchers.
+
+### Fixed
+
+- Fix(Audio): MP3 duration now calculated from frame header when Mix_MusicDuration unavailable
+  WHY: Older SDL_mixer versions don't have Mix_MusicDuration, was showing "--:--".
+
+- Fix(Display): Auto-detect screen dimensions with SDL_GetCurrentDisplayMode
+  WHY: Hardcoded 1280x720 was causing overflow on some displays.
+
+### Technical
+
+- Added `screen.c/h` - Backlight control via sysfs interface
+- Added `input_poll_holds()` for button hold detection
+- Added `ui_render_help_browser()` and `ui_render_help_player()` overlays
+- Added `estimate_mp3_duration()` fallback for MP3 duration calculation
+- Launcher now sets CPU to 1.2GHz userspace governor with cleanup trap
+
+---
+
+## [2026.02.04] - v1.4.0
+
+### Added
+
+- Feat(State): Resume playback - app remembers last played track, position, and settings
+  WHY: Users want to continue where they left off when reopening the app.
+
+- Feat(Favorites): Mark tracks as favorites with Y button (shows \* indicator)
+  WHY: Users need a way to quickly access their preferred tracks.
+
+- Feat(State): Persist user preferences (volume, shuffle, repeat mode)
+  WHY: Settings should survive app restarts without manual reconfiguration.
+
+### Changed
+
+- Changed(Input): Y button now toggles favorite (was shuffle, moved to Select)
+  WHY: Dedicated button for favorites improves UX.
+
+- Changed(UI): Browser shows \* prefix for favorite tracks in accent color
+  WHY: Visual feedback helps users identify their favorites at a glance.
+
+- Changed(UI): Player header shows \* when current track is a favorite
+  WHY: Consistent favorite indicator across all views.
+
+### Technical
+
+- Added `state.c/h` - JSON-based state persistence (~/.mono/ on macOS, ~/.userdata/tg5040/Mono/ on device)
+- Added `favorites.c/h` - Favorites management with JSON storage
+- Added `browser_set_cursor()` and `browser_navigate_to()` for state restoration
+- Added `menu_set_shuffle()` and `menu_set_repeat()` for preference restoration
+
+---
+
 ## [2026.02.04] - v1.3.0
 
 ### Added

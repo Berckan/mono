@@ -51,7 +51,32 @@ static bool is_audio_file(const char *name) {
 }
 
 /**
- * Compare function for sorting entries (directories first, then alphabetically)
+ * Natural sort comparison - treats embedded numbers as integers
+ * Example: "Track 2" < "Track 10" (unlike alphabetical sort)
+ */
+static int compare_natural(const char *a, const char *b) {
+    while (*a && *b) {
+        if (isdigit((unsigned char)*a) && isdigit((unsigned char)*b)) {
+            // Both pointing to digits - compare as integers
+            long na = strtol(a, (char **)&a, 10);
+            long nb = strtol(b, (char **)&b, 10);
+            if (na != nb) return (na < nb) ? -1 : 1;
+            // Numbers equal, continue comparing rest of string
+        } else {
+            // Compare characters case-insensitively
+            int ca = tolower((unsigned char)*a);
+            int cb = tolower((unsigned char)*b);
+            if (ca != cb) return ca - cb;
+            a++;
+            b++;
+        }
+    }
+    // Handle different lengths
+    return (unsigned char)*a - (unsigned char)*b;
+}
+
+/**
+ * Compare function for sorting entries (directories first, then natural sort)
  */
 static int compare_entries(const void *a, const void *b) {
     const FileEntry *ea = (const FileEntry *)a;
@@ -62,8 +87,8 @@ static int compare_entries(const void *a, const void *b) {
         return ea->type == ENTRY_DIRECTORY ? -1 : 1;
     }
 
-    // Alphabetical within same type (case-insensitive)
-    return strcasecmp(ea->name, eb->name);
+    // Natural sort within same type
+    return compare_natural(ea->name, eb->name);
 }
 
 /**
@@ -227,4 +252,33 @@ const char* browser_get_current_path(void) {
 
 int browser_get_scroll_offset(void) {
     return g_scroll_offset;
+}
+
+void browser_set_cursor(int pos) {
+    if (pos < 0) pos = 0;
+    if (pos >= g_entry_count) pos = g_entry_count > 0 ? g_entry_count - 1 : 0;
+
+    g_cursor = pos;
+
+    // Update scroll offset to keep cursor visible
+    if (g_cursor < g_scroll_offset) {
+        g_scroll_offset = g_cursor;
+    } else if (g_cursor >= g_scroll_offset + VISIBLE_ITEMS) {
+        g_scroll_offset = g_cursor - VISIBLE_ITEMS + 1;
+    }
+}
+
+int browser_navigate_to(const char *path) {
+    if (!path || path[0] == '\0') return -1;
+
+    // Verify directory exists
+    DIR *dir = opendir(path);
+    if (!dir) {
+        fprintf(stderr, "Cannot navigate to: %s\n", path);
+        return -1;
+    }
+    closedir(dir);
+
+    strncpy(g_current_path, path, sizeof(g_current_path) - 1);
+    return scan_directory(g_current_path);
 }

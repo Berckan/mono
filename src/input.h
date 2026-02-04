@@ -17,11 +17,15 @@ typedef enum {
     INPUT_LEFT,
     INPUT_RIGHT,
     INPUT_SELECT,    // A button
-    INPUT_BACK,      // B button
+    INPUT_BACK,      // X button (B is captured by system)
     INPUT_PREV,      // L button
     INPUT_NEXT,      // R button
     INPUT_MENU,      // Start button
-    INPUT_SHUFFLE    // Select button
+    INPUT_SHUFFLE,   // Select button (browser: shuffle, player: dim screen)
+    INPUT_FAVORITE,  // Y button tap - toggle favorite
+    INPUT_HELP,      // Y button hold - show help overlay
+    INPUT_VOL_UP,    // Hardware volume up
+    INPUT_VOL_DOWN   // Hardware volume down
 } InputAction;
 
 /**
@@ -30,5 +34,12 @@ typedef enum {
  * @return Input action or INPUT_NONE
  */
 InputAction input_handle_event(const SDL_Event *event);
+
+/**
+ * Poll for hold actions (call once per frame)
+ * Returns INPUT_HELP if Y button is held for threshold time
+ * @return Input action or INPUT_NONE
+ */
+InputAction input_poll_holds(void);
 
 #endif // INPUT_H

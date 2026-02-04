@@ -80,4 +80,14 @@ const char* menu_get_repeat_string(void);
  */
 const char* menu_get_sleep_string(void);
 
+/**
+ * Set shuffle state (for state restoration)
+ */
+void menu_set_shuffle(bool enabled);
+
+/**
+ * Set repeat mode (for state restoration)
+ */
+void menu_set_repeat(RepeatMode mode);
+
 #endif // MENU_H
