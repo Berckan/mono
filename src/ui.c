@@ -1378,6 +1378,34 @@ void ui_render_youtube_search(void) {
     SDL_SetRenderDrawColor(g_renderer, COLOR_BG.r, COLOR_BG.g, COLOR_BG.b, 255);
     SDL_RenderClear(g_renderer);
 
+    // Check if we're in SEARCHING state - show loading indicator
+    if (ytsearch_get_state() == YTSEARCH_SEARCHING) {
+        // Title
+        render_text_centered("YouTube Search", 20, g_font_medium, COLOR_ACCENT);
+
+        // Show searching message with animated monkey
+        render_text_centered("Searching...", g_screen_height / 2 - 80, g_font_large, COLOR_ACCENT);
+
+        // Show query being searched
+        const char *query = ytsearch_get_query();
+        if (query && query[0]) {
+            char display[128];
+            snprintf(display, sizeof(display), "\"%s\"", query);
+            render_text_centered(display, g_screen_height / 2 - 20, g_font_medium, COLOR_TEXT);
+        }
+
+        // Animated monkey (always animating during search)
+        int monkey_x = (g_screen_width - 16 * MONKEY_PIXEL_SIZE) / 2;
+        int monkey_y = g_screen_height / 2 + 40;
+        render_monkey(monkey_x, monkey_y, true);  // true = animate
+
+        // Hint
+        render_text_centered("Please wait...", g_screen_height - 100, g_font_small, COLOR_DIM);
+
+        SDL_RenderPresent(g_renderer);
+        return;
+    }
+
     // Title
     render_text_centered("YouTube Search", 20, g_font_medium, COLOR_ACCENT);
 
@@ -1451,12 +1479,19 @@ void ui_render_youtube_search(void) {
     }
 
     // Controls
-    int ctrl_y = g_screen_height - 80;
+    int ctrl_y = g_screen_height - 100;
     render_text_centered("D-Pad: Select   A: Insert   Y: Delete", ctrl_y, g_font_small, COLOR_DIM);
-    render_text_centered("Start: Search   B: Cancel", ctrl_y + 35, g_font_small, COLOR_DIM);
+    render_text_centered("Start: Search   B: Cancel", ctrl_y + 30, g_font_small, COLOR_DIM);
 
     SDL_RenderPresent(g_renderer);
 }
+
+// Scroll state for YouTube results title
+static int g_yt_scroll_offset = 0;
+static int g_yt_scroll_cursor = -1;
+static Uint32 g_yt_scroll_last_update = 0;
+#define YT_SCROLL_SPEED_MS 100  // ms per character scroll
+#define YT_SCROLL_PAUSE_MS 1500 // pause at start/end
 
 void ui_render_youtube_results(void) {
     // Clear screen
@@ -1467,15 +1502,23 @@ void ui_render_youtube_results(void) {
     const char *query = ytsearch_get_query();
     char header[128];
     snprintf(header, sizeof(header), "Results: %s", query);
-    render_text(header, MARGIN, 8, g_font_medium, COLOR_TEXT);
+    render_text(header, MARGIN, 8, g_font_small, COLOR_TEXT);
 
     // Results list
     int result_count = ytsearch_get_result_count();
     int cursor = ytsearch_get_results_cursor();
     int scroll = ytsearch_get_scroll_offset();
 
+    // Reset scroll when cursor changes
+    if (cursor != g_yt_scroll_cursor) {
+        g_yt_scroll_cursor = cursor;
+        g_yt_scroll_offset = 0;
+        g_yt_scroll_last_update = SDL_GetTicks() + YT_SCROLL_PAUSE_MS;
+    }
+
     int y = HEADER_HEIGHT + 10;
-    int visible = 7;  // Number of visible results
+    int visible = 8;  // More visible results with smaller font
+    int max_title_chars = 55;  // Max chars that fit on screen with small font
 
     for (int i = 0; i < visible && (scroll + i) < result_count; i++) {
         int idx = scroll + i;
@@ -1486,34 +1529,58 @@ void ui_render_youtube_results(void) {
 
         // Highlight selected item
         if (is_selected) {
-            draw_rect(0, y - 5, g_screen_width, LINE_HEIGHT + 30, COLOR_HIGHLIGHT);
+            draw_rect(0, y - 5, g_screen_width, LINE_HEIGHT + 10, COLOR_HIGHLIGHT);
         }
 
         // Format duration
         char duration_str[16];
         youtube_format_duration(result->duration_sec, duration_str);
 
-        // Title (truncated)
-        char title_display[80];
-        if (strlen(result->title) > 45) {
-            snprintf(title_display, sizeof(title_display), "%.42s...", result->title);
+        // Title with scroll for selected long titles
+        char title_display[256];
+        int title_len = strlen(result->title);
+
+        if (is_selected && title_len > max_title_chars) {
+            // Animate scroll for selected item with long title
+            Uint32 now = SDL_GetTicks();
+            if (now > g_yt_scroll_last_update) {
+                if (now - g_yt_scroll_last_update > YT_SCROLL_SPEED_MS) {
+                    g_yt_scroll_offset++;
+                    g_yt_scroll_last_update = now;
+                    // Reset at end of title
+                    if (g_yt_scroll_offset > title_len - max_title_chars + 10) {
+                        g_yt_scroll_offset = 0;
+                        g_yt_scroll_last_update = now + YT_SCROLL_PAUSE_MS;
+                    }
+                }
+            }
+
+            // Show scrolled portion
+            int start = g_yt_scroll_offset;
+            if (start > title_len) start = 0;
+            snprintf(title_display, sizeof(title_display), "%.*s",
+                     max_title_chars, result->title + start);
+        } else if (title_len > max_title_chars) {
+            // Truncate non-selected long titles
+            snprintf(title_display, sizeof(title_display), "%.*s...",
+                     max_title_chars - 3, result->title);
         } else {
             strncpy(title_display, result->title, sizeof(title_display) - 1);
             title_display[sizeof(title_display) - 1] = '\0';
         }
 
-        // Render title
+        // Render title (smaller font)
         render_text(title_display, MARGIN + 10, y,
-                   g_font_medium, is_selected ? COLOR_ACCENT : COLOR_TEXT);
+                   g_font_small, is_selected ? COLOR_ACCENT : COLOR_TEXT);
 
         // Render channel and duration on next line
         char meta_display[128];
-        snprintf(meta_display, sizeof(meta_display), "%.30s  [%s]",
+        snprintf(meta_display, sizeof(meta_display), "%.35s  [%s]",
                  result->channel, duration_str);
-        render_text(meta_display, MARGIN + 20, y + 35,
+        render_text(meta_display, MARGIN + 20, y + 28,
                    g_font_small, COLOR_DIM);
 
-        y += LINE_HEIGHT + 30;
+        y += LINE_HEIGHT + 10;  // Reduced spacing with smaller font
     }
 
     // Scroll indicators

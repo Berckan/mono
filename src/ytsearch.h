@@ -185,6 +185,14 @@ const char* ytsearch_get_download_title(void);
  */
 void ytsearch_cancel_download(void);
 
+/**
+ * Set render callback for progress updates during blocking download
+ * This allows the main loop to render UI while download is in progress
+ * @param callback Function to call for each progress update (can render UI)
+ */
+typedef void (*YTSearchRenderCallback)(void);
+void ytsearch_set_render_callback(YTSearchRenderCallback callback);
+
 // ============================================================================
 // Error Handling
 // ============================================================================

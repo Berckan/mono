@@ -240,19 +240,21 @@ const char* youtube_download(const char *video_id, YouTubeProgressCallback progr
 
     // Build yt-dlp download command
     // -x: Extract audio
-    // --audio-format mp3: Convert to MP3
-    // --audio-quality 0: Best quality
-    // -o: Output template
+    // --audio-format mp3: Convert to MP3 (fallback to m4a/opus if no ffmpeg)
+    // --audio-quality 5: Medium quality (faster)
+    // --progress --newline: Machine-readable progress output
+    // -o: Output template (fixed extension for predictable path)
     char cmd[1024];
     snprintf(cmd, sizeof(cmd),
         "%s -x --audio-format mp3 --audio-quality 5 "
-        "--no-playlist --no-warnings "
-        "-o '%s/%s%%(id)s.%%(ext)s' "
+        "--no-playlist --progress --newline "
+        "-o '%s' "
         "'https://www.youtube.com/watch?v=%s' "
         "2>&1",
-        g_ytdlp_path, TEMP_DIR, TEMP_PREFIX, video_id);
+        g_ytdlp_path, g_temp_file, video_id);
 
     printf("[YOUTUBE] Downloading: %s\n", video_id);
+    printf("[YOUTUBE] Command: %s\n", cmd);
 
     // Execute download
     FILE *pipe = popen(cmd, "r");
@@ -266,8 +268,20 @@ const char* youtube_download(const char *video_id, YouTubeProgressCallback progr
     int last_percent = 0;
 
     while (fgets(line, sizeof(line), pipe)) {
+        // Remove trailing newline for logging
+        line[strcspn(line, "\n")] = '\0';
+
+        // Log all output for debugging
+        printf("[YOUTUBE] yt-dlp: %s\n", line);
+
+        // Look for error messages
+        if (strstr(line, "ERROR") || strstr(line, "error")) {
+            // Store error message for user
+            strncpy(g_error, line, sizeof(g_error) - 1);
+        }
+
         // Look for download progress
-        // yt-dlp output: [download]  50.0% of 5.00MiB
+        // yt-dlp output with --progress --newline: [download]  50.0% of 5.00MiB
         char *pct = strstr(line, "%");
         if (pct) {
             // Find the number before %
@@ -296,22 +310,34 @@ const char* youtube_download(const char *video_id, YouTubeProgressCallback progr
 
     int status = pclose(pipe);
 
-    // Check if file was created
-    if (status != 0 || access(g_temp_file, F_OK) != 0) {
-        // Try .m4a extension (yt-dlp might not convert on some systems)
+    // Check if file was created (try multiple extensions)
+    // yt-dlp might output different formats depending on ffmpeg availability
+    if (access(g_temp_file, F_OK) != 0) {
+        // Try alternative extensions
+        const char *alt_exts[] = {".m4a", ".opus", ".webm", ".ogg", NULL};
         char alt_path[512];
-        snprintf(alt_path, sizeof(alt_path),
-                 "%s/%s%s.m4a", TEMP_DIR, TEMP_PREFIX, video_id);
-        if (access(alt_path, F_OK) == 0) {
-            strncpy(g_temp_file, alt_path, sizeof(g_temp_file) - 1);
-            printf("[YOUTUBE] Downloaded (m4a): %s\n", g_temp_file);
-            return g_temp_file;
+        bool found = false;
+
+        // Build base path without .mp3 extension
+        char base_path[512];
+        snprintf(base_path, sizeof(base_path), "%s/%s%s", TEMP_DIR, TEMP_PREFIX, video_id);
+
+        for (int i = 0; alt_exts[i]; i++) {
+            snprintf(alt_path, sizeof(alt_path), "%s%s", base_path, alt_exts[i]);
+            if (access(alt_path, F_OK) == 0) {
+                strncpy(g_temp_file, alt_path, sizeof(g_temp_file) - 1);
+                printf("[YOUTUBE] Downloaded (%s): %s\n", alt_exts[i] + 1, g_temp_file);
+                found = true;
+                break;
+            }
         }
 
-        snprintf(g_error, sizeof(g_error), "Download failed");
-        fprintf(stderr, "[YOUTUBE] Download failed, exit code: %d\n", status);
-        g_temp_file[0] = '\0';
-        return NULL;
+        if (!found) {
+            snprintf(g_error, sizeof(g_error), "Download failed (exit: %d)", status);
+            fprintf(stderr, "[YOUTUBE] Download failed, exit code: %d\n", status);
+            g_temp_file[0] = '\0';
+            return NULL;
+        }
     }
 
     if (progress_cb) {

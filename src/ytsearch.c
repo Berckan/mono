@@ -52,6 +52,9 @@ static char g_error[256] = {0};
 // Search pending flag (for async-like behavior)
 static bool g_search_pending = false;
 
+// Render callback for progress updates
+static YTSearchRenderCallback g_render_callback = NULL;
+
 void ytsearch_init(void) {
     g_state = YTSEARCH_INPUT;
     g_query[0] = '\0';
@@ -272,7 +275,17 @@ static bool download_progress_callback(int percent, const char *status) {
     if (status) {
         strncpy(g_download_status, status, sizeof(g_download_status) - 1);
     }
+
+    // Call render callback to update UI during blocking download
+    if (g_render_callback) {
+        g_render_callback();
+    }
+
     return !g_download_cancelled;
+}
+
+void ytsearch_set_render_callback(YTSearchRenderCallback callback) {
+    g_render_callback = callback;
 }
 
 bool ytsearch_start_download(void) {

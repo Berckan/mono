@@ -80,6 +80,15 @@ static char g_current_track_path[512] = {0};
 static SDL_Joystick *g_joystick = NULL;
 
 /**
+ * Render callback for YouTube download progress
+ * Called from within blocking download to update UI
+ */
+static void download_render_callback(void) {
+    ui_render_youtube_download();
+    SDL_PumpEvents();  // Allow cancel detection via B button
+}
+
+/**
  * Initialize SDL2 and all subsystems
  */
 static int init_sdl(void) {
@@ -548,6 +557,7 @@ static void handle_input(AppState *state) {
                                 menu_reset_youtube();
                                 // Initialize YouTube search and switch state
                                 ytsearch_init();
+                                ytsearch_set_render_callback(download_render_callback);
                                 *state = STATE_YOUTUBE_SEARCH;
                             } else {
                                 // Exit selected - stop playback (if playing) and return to browser
@@ -846,8 +856,12 @@ static void update(AppState *state) {
         }
     }
 
-    // Handle YouTube search (async-like, one frame to complete)
+    // Handle YouTube search (blocking operation with loading indicator)
     if (*state == STATE_YOUTUBE_SEARCH && ytsearch_get_state() == YTSEARCH_SEARCHING) {
+        // Render "Searching..." screen BEFORE blocking search call
+        // This ensures user sees the loading indicator
+        ui_render_youtube_search();
+
         if (ytsearch_update_search()) {
             // Search complete
             if (ytsearch_get_state() == YTSEARCH_RESULTS) {
