@@ -847,6 +847,15 @@ void audio_seek(int seconds) {
     }
 }
 
+void audio_seek_absolute(int position_sec) {
+    if (!g_music) return;
+
+    // Calculate relative seek from current position
+    int current = (int)g_music_position;
+    int delta = position_sec - current;
+    audio_seek(delta);
+}
+
 void audio_set_volume(int volume) {
     if (volume < 0) volume = 0;
     if (volume > 100) volume = 100;

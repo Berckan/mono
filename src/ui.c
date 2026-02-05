@@ -18,6 +18,7 @@
 #include "theme.h"
 #include "ytsearch.h"
 #include "youtube.h"
+#include "download_queue.h"
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
 #include <stdio.h>
@@ -427,11 +428,6 @@ static void render_battery_icon(int x, int y, int percent, bool charging) {
         SDL_SetRenderDrawColor(g_renderer, fill_color.r, fill_color.g, fill_color.b, 255);
         SDL_RenderFillRect(g_renderer, &fill);
     }
-
-    // Charging indicator (above battery, centered)
-    if (charging) {
-        render_text("⚡", x + batt_w / 2 - 8, y - 22, g_font_small, COLOR_ACCENT);
-    }
 }
 
 /**
@@ -480,7 +476,7 @@ static void render_play_pause_icon(int center_x, int y, bool is_playing) {
  */
 static void render_status_bar(void) {
     int text_y = 16;  // Vertical position for text
-    int batt_y = 24;  // Battery icon vertically centered with text (32px font, 16px icon)
+    int batt_y = 31;  // Battery icon vertically centered with text
     int right_margin = 20;  // Keep away from screen edge
 
     // Battery indicator (rightmost)
@@ -506,6 +502,19 @@ static void render_status_bar(void) {
         snprintf(vol_str, sizeof(vol_str), "Vol:--");
     }
     render_text(vol_str, g_screen_width - 280 - right_margin, text_y, g_font_small, COLOR_TEXT);
+
+    // Download queue indicator (to the left of volume)
+    int pending = dlqueue_pending_count();
+    if (pending > 0) {
+        char dl_str[32];
+        int progress = dlqueue_get_progress();
+        if (progress >= 0) {
+            snprintf(dl_str, sizeof(dl_str), "DL:%d%% (%d)", progress, pending);
+        } else {
+            snprintf(dl_str, sizeof(dl_str), "DL:(%d)", pending);
+        }
+        render_text(dl_str, g_screen_width - 450 - right_margin, text_y, g_font_small, COLOR_ACCENT);
+    }
 }
 
 int ui_init(int width, int height) {
@@ -1576,14 +1585,22 @@ void ui_render_youtube_results(void) {
             title_display[sizeof(title_display) - 1] = '\0';
         }
 
+        // Check if already in queue
+        bool is_queued = dlqueue_is_queued(result->id);
+
+        // Render queue indicator
+        if (is_queued) {
+            render_text("+", MARGIN - 5, y, g_font_small, COLOR_ACCENT);
+        }
+
         // Render title (smaller font)
         render_text(title_display, MARGIN + 10, y,
-                   g_font_small, is_selected ? COLOR_ACCENT : COLOR_TEXT);
+                   g_font_small, is_selected ? COLOR_ACCENT : (is_queued ? COLOR_DIM : COLOR_TEXT));
 
         // Render channel and duration on next line
         char meta_display[128];
-        snprintf(meta_display, sizeof(meta_display), "%.35s  [%s]",
-                 result->channel, duration_str);
+        snprintf(meta_display, sizeof(meta_display), "%.35s  [%s]%s",
+                 result->channel, duration_str, is_queued ? " (queued)" : "");
         render_text(meta_display, MARGIN + 20, y + 28,
                    g_font_small, COLOR_DIM);
 
@@ -1603,8 +1620,15 @@ void ui_render_youtube_results(void) {
     snprintf(footer, sizeof(footer), "%d of %d", cursor + 1, result_count);
     render_text_centered(footer, g_screen_height - 45, g_font_small, COLOR_DIM);
 
-    // Controls hint
-    render_text("A: Download   B: Back", MARGIN, g_screen_height - 25, g_font_small, COLOR_DIM);
+    // Controls hint - update to reflect queue behavior
+    int pending = dlqueue_pending_count();
+    if (pending > 0) {
+        char hint[64];
+        snprintf(hint, sizeof(hint), "A: Add to queue (%d)   B: Back", pending);
+        render_text(hint, MARGIN, g_screen_height - 25, g_font_small, COLOR_DIM);
+    } else {
+        render_text("A: Add to queue   B: Back", MARGIN, g_screen_height - 25, g_font_small, COLOR_DIM);
+    }
 
     SDL_RenderPresent(g_renderer);
 }

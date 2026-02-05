@@ -36,25 +36,28 @@ static bool is_audio_file(const char *name) {
     const char *ext = strrchr(name, '.');
     if (!ext || ext[1] == '\0') return false;
 
-    // Fast path: check length first (all supported extensions are 3-4 chars + dot)
+    // Get extension length
     int len = 0;
     for (const char *p = ext; *p; p++) len++;
     if (len < 4 || len > 5) return false;
 
-    // Case-insensitive comparison using switch on first char
+    // Case-insensitive comparison
     char c1 = ext[1] | 0x20;  // tolower
     char c2 = ext[2] | 0x20;
     char c3 = ext[3] | 0x20;
 
     if (len == 4) {
-        // .mp3, .ogg, .wav
+        // .mp3, .ogg, .wav, .m4a
         if (c1 == 'm' && c2 == 'p' && c3 == '3') return true;
         if (c1 == 'o' && c2 == 'g' && c3 == 'g') return true;
         if (c1 == 'w' && c2 == 'a' && c3 == 'v') return true;
+        if (c1 == 'm' && c2 == '4' && c3 == 'a') return true;
     } else {
-        // .flac
+        // .flac, .webm, .opus
         char c4 = ext[4] | 0x20;
         if (c1 == 'f' && c2 == 'l' && c3 == 'a' && c4 == 'c') return true;
+        if (c1 == 'w' && c2 == 'e' && c3 == 'b' && c4 == 'm') return true;
+        if (c1 == 'o' && c2 == 'p' && c3 == 'u' && c4 == 's') return true;
     }
 
     return false;

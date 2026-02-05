@@ -27,8 +27,10 @@
 #define KEY_A       SDLK_z       // A button (confirm)
 #define KEY_B       SDLK_x       // B button (back)
 #define KEY_Y       SDLK_f       // Y button (favorite) - F key on keyboard
-#define KEY_L       SDLK_a       // L shoulder
-#define KEY_R       SDLK_s       // R shoulder
+#define KEY_L       SDLK_a       // L1 shoulder
+#define KEY_R       SDLK_s       // R1 shoulder
+#define KEY_L2      SDLK_q       // L2 trigger - jump to start
+#define KEY_R2      SDLK_w       // R2 trigger - jump to end
 #define KEY_START   SDLK_RETURN  // Start
 #define KEY_SELECT  SDLK_RSHIFT  // Select
 
@@ -40,11 +42,14 @@
 #define JOY_Y       2   // North button
 #define JOY_L1      4   // Left shoulder
 #define JOY_R1      5   // Right shoulder
+// L2/R2 are analog triggers on axes, not buttons
+#define AXIS_L2     2   // Left trigger axis (ABSZ)
+#define AXIS_R2     5   // Right trigger axis (RABSZ)
 #define JOY_SELECT  6
 #define JOY_START   7
 #define JOY_MENU    8
-#define JOY_VOL_UP  10  // Volume up (tentative - verify with debug output)
-#define JOY_VOL_DOWN 11 // Volume down (tentative - verify with debug output)
+#define JOY_VOL_UP  11  // Volume up
+#define JOY_VOL_DOWN 12 // Volume down
 
 // Button state tracking for debouncing (gamepad doesn't filter repeats like keyboard)
 static Uint8 g_button_state[16] = {0};
@@ -84,6 +89,8 @@ InputAction input_handle_event(const SDL_Event *event) {
                 case KEY_Y:      return INPUT_FAVORITE;
                 case KEY_L:      return INPUT_PREV;
                 case KEY_R:      return INPUT_NEXT;
+                case KEY_L2:     return INPUT_SEEK_START;
+                case KEY_R2:     return INPUT_SEEK_END;
                 case KEY_START:  return INPUT_MENU;
                 case KEY_SELECT: return INPUT_SHUFFLE;
                 case SDLK_ESCAPE:return INPUT_BACK;
@@ -135,6 +142,7 @@ InputAction input_handle_event(const SDL_Event *event) {
                     return INPUT_PREV;     // L1 - previous track
                 case JOY_R1:
                     return INPUT_NEXT;     // R1 - next track
+                // L2/R2 handled via axis (analog triggers)
                 case JOY_SELECT: return INPUT_SHUFFLE;  // Select - shuffle/dim toggle
                 case JOY_START:
                     // Track Start press for combos
@@ -237,6 +245,10 @@ InputAction input_handle_event(const SDL_Event *event) {
                     }
                 } else if (event->jaxis.axis == 1) {  // Y axis (Up/Down)
                     return (event->jaxis.value < 0) ? INPUT_UP : INPUT_DOWN;
+                } else if (event->jaxis.axis == AXIS_L2) {  // L2 trigger
+                    return INPUT_SEEK_START;
+                } else if (event->jaxis.axis == AXIS_R2) {  // R2 trigger
+                    return INPUT_SEEK_END;
                 }
             } else if (abs(event->jaxis.value) < 8000) {
                 // Axis returned to center - reset seek if X axis

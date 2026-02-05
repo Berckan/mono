@@ -35,6 +35,7 @@
 #include "metadata.h"
 #include "youtube.h"
 #include "ytsearch.h"
+#include "download_queue.h"
 
 // Screen dimensions (auto-detected at runtime)
 static int g_screen_width = 1280;   // Fallback
@@ -248,6 +249,7 @@ static void cleanup(void) {
     sysinfo_cleanup();
 
     metadata_cleanup();
+    dlqueue_shutdown();
     youtube_cleanup();
     audio_cleanup();
     ui_cleanup();
@@ -535,6 +537,18 @@ static void handle_input(AppState *state) {
                         g_prev_state = STATE_PLAYING;
                         *state = STATE_HELP_PLAYER;
                         break;
+                    case INPUT_SEEK_START:
+                        // L2 - jump to beginning of track
+                        audio_seek_absolute(0);
+                        break;
+                    case INPUT_SEEK_END: {
+                        // R2 - jump near end of track (5 seconds before end)
+                        const TrackInfo *info = audio_get_track_info();
+                        if (info && info->duration_sec > 5) {
+                            audio_seek_absolute(info->duration_sec - 5);
+                        }
+                        break;
+                    }
                     default:
                         break;
                 }
@@ -688,12 +702,17 @@ static void handle_input(AppState *state) {
                     case INPUT_DOWN:
                         ytsearch_move_results_cursor(1);
                         break;
-                    case INPUT_SELECT:
-                        // Start download of selected result
-                        if (ytsearch_start_download()) {
-                            *state = STATE_YOUTUBE_DOWNLOAD;
+                    case INPUT_SELECT: {
+                        // Add selected result to download queue (background download)
+                        const YouTubeResult *result = ytsearch_get_result(ytsearch_get_results_cursor());
+                        if (result) {
+                            if (dlqueue_add(result->id, result->title, result->channel)) {
+                                printf("[MAIN] Added to queue: %s\n", result->title);
+                            }
                         }
+                        // Stay in results - user can add more
                         break;
+                    }
                     case INPUT_BACK:
                         // Go back to search input
                         ytsearch_set_state(YTSEARCH_INPUT);
@@ -705,11 +724,8 @@ static void handle_input(AppState *state) {
                 break;
 
             case STATE_YOUTUBE_DOWNLOAD:
-                // Only B to cancel
-                if (action == INPUT_BACK) {
-                    ytsearch_cancel_download();
-                    *state = STATE_YOUTUBE_RESULTS;
-                }
+                // Legacy - no longer used (downloads are background now)
+                *state = STATE_YOUTUBE_RESULTS;
                 break;
 
             case STATE_LOADING:
@@ -869,20 +885,13 @@ static void update(AppState *state) {
         }
     }
 
-    // Handle YouTube download
-    if (*state == STATE_YOUTUBE_DOWNLOAD) {
-        const char *downloaded = ytsearch_update_download();
-        if (downloaded) {
-            // Download complete - play the file
-            if (play_file(downloaded)) {
-                *state = STATE_PLAYING;
-            } else {
-                // Error playing
-                *state = STATE_YOUTUBE_RESULTS;
-            }
-        } else if (ytsearch_get_state() != YTSEARCH_DOWNLOADING) {
-            // Download cancelled or failed
-            *state = STATE_YOUTUBE_RESULTS;
+    // Check for completed background downloads
+    if (dlqueue_has_new_completions()) {
+        // A download finished in the background
+        // Just log it - user stays in current state
+        const char *completed = dlqueue_get_last_completed();
+        if (completed) {
+            printf("[MAIN] Background download complete: %s\n", completed);
         }
     }
 
@@ -921,9 +930,6 @@ static void render(AppState *state) {
             break;
         case STATE_RENAME:
             ui_render_rename();
-            break;
-        case STATE_CONFIRM:
-            // Handled within STATE_FILE_MENU
             break;
         case STATE_SCANNING:
             ui_render_scanning(g_scan_current, g_scan_total, g_scan_current_file, g_scan_found);
@@ -996,6 +1002,9 @@ int main(int argc, char *argv[]) {
 
     // Initialize YouTube integration
     youtube_init();
+
+    // Initialize background download queue
+    dlqueue_init();
 
     // Initialize file browser
     // Default music path - can be overridden via command line

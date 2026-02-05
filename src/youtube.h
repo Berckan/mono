@@ -79,4 +79,10 @@ const char* youtube_get_error(void);
  */
 void youtube_format_duration(int duration_sec, char *buffer);
 
+/**
+ * Get the download directory path
+ * @return Path to download directory (e.g., "/mnt/SDCARD/Music/YouTube")
+ */
+const char* youtube_get_download_dir(void);
+
 #endif // YOUTUBE_H

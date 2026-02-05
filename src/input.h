@@ -19,8 +19,10 @@ typedef enum {
     INPUT_RIGHT,
     INPUT_SELECT,    // A button
     INPUT_BACK,      // B button
-    INPUT_PREV,      // L button
-    INPUT_NEXT,      // R button
+    INPUT_PREV,      // L1 button
+    INPUT_NEXT,      // R1 button
+    INPUT_SEEK_START,// L2 button - jump to start of track
+    INPUT_SEEK_END,  // R2 button - jump to end of track
     INPUT_MENU,      // Start button
     INPUT_SHUFFLE,   // Select button (browser: shuffle, player: dim screen)
     INPUT_FAVORITE,  // Y button tap - toggle favorite

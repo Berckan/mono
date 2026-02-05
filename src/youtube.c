@@ -18,16 +18,38 @@
 #define YTDLP_BUNDLED_ABS "Mono.pak/bin/yt-dlp"    // When running from parent dir
 #define YTDLP_SYSTEM      "yt-dlp"                 // System-wide installation
 
-// Temp file locations
-#define TEMP_DIR "/tmp"
-#define TEMP_PREFIX "mono_yt_"
+// File locations
 #define TEMP_SEARCH_FILE "/tmp/mono_yt_search.json"
+#define DEFAULT_DOWNLOAD_DIR "/mnt/SDCARD/Music/YouTube"
 
 // Current state
 static bool g_available = false;
 static char g_ytdlp_path[256] = {0};
-static char g_temp_file[512] = {0};
+static char g_download_dir[256] = DEFAULT_DOWNLOAD_DIR;
+static char g_download_file[512] = {0};
 static char g_error[256] = {0};
+
+/**
+ * Sanitize filename - remove invalid characters
+ */
+static void sanitize_filename(const char *src, char *dst, size_t dst_size) {
+    size_t j = 0;
+    for (size_t i = 0; src[i] && j < dst_size - 1; i++) {
+        char c = src[i];
+        // Replace invalid filename characters with underscore
+        if (c == '/' || c == '\\' || c == ':' || c == '*' ||
+            c == '?' || c == '"' || c == '<' || c == '>' || c == '|') {
+            c = '_';
+        }
+        dst[j++] = c;
+    }
+    dst[j] = '\0';
+
+    // Trim trailing spaces/dots (Windows compatibility)
+    while (j > 0 && (dst[j-1] == ' ' || dst[j-1] == '.')) {
+        dst[--j] = '\0';
+    }
+}
 
 /**
  * URL encode a string for use in search query
@@ -60,21 +82,20 @@ static bool file_executable(const char *path) {
 }
 
 /**
- * Delete all temp files matching our pattern
+ * Cleanup temp search files (not downloaded music - that's permanent)
  */
 static void cleanup_temp_files(void) {
-    // Simple cleanup - remove known temp files
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd), "rm -f %s/%s*.mp3 %s 2>/dev/null",
-             TEMP_DIR, TEMP_PREFIX, TEMP_SEARCH_FILE);
-    system(cmd);
+    unlink(TEMP_SEARCH_FILE);
 }
 
 void youtube_init(void) {
     g_available = false;
     g_ytdlp_path[0] = '\0';
-    g_temp_file[0] = '\0';
+    g_download_file[0] = '\0';
     g_error[0] = '\0';
+
+    // Create download directory if it doesn't exist
+    mkdir(g_download_dir, 0755);
 
     // Check for bundled yt-dlp (relative path - when running from Mono.pak/)
     if (file_executable(YTDLP_BUNDLED_REL)) {
@@ -108,7 +129,7 @@ void youtube_init(void) {
 
 void youtube_cleanup(void) {
     cleanup_temp_files();
-    g_temp_file[0] = '\0';
+    g_download_file[0] = '\0';
     printf("[YOUTUBE] Cleanup complete\n");
 }
 
@@ -218,22 +239,19 @@ const char* youtube_download(const char *video_id, YouTubeProgressCallback progr
 
     g_error[0] = '\0';
 
-    // Clean up previous temp file
-    if (g_temp_file[0]) {
-        unlink(g_temp_file);
-        g_temp_file[0] = '\0';
-    }
+    // Don't delete previous file - downloads are permanent now
+    g_download_file[0] = '\0';
 
     // Check if already downloaded (cache hit) - try common audio extensions
-    const char *cache_exts[] = {".m4a", ".webm", ".opus", ".mp3", ".ogg", NULL};
+    const char *cache_exts[] = {".webm", ".ogg", ".opus", ".m4a", NULL};
     char cache_path[512];
     for (int i = 0; cache_exts[i]; i++) {
         snprintf(cache_path, sizeof(cache_path),
-                 "%s/%s%s%s", TEMP_DIR, TEMP_PREFIX, video_id, cache_exts[i]);
+                 "%s/%s%s", g_download_dir, video_id, cache_exts[i]);
         if (access(cache_path, F_OK) == 0) {
-            strncpy(g_temp_file, cache_path, sizeof(g_temp_file) - 1);
-            printf("[YOUTUBE] Using cached file: %s\n", g_temp_file);
-            return g_temp_file;
+            strncpy(g_download_file, cache_path, sizeof(g_download_file) - 1);
+            printf("[YOUTUBE] Using cached file: %s\n", g_download_file);
+            return g_download_file;
         }
     }
 
@@ -250,10 +268,10 @@ const char* youtube_download(const char *video_id, YouTubeProgressCallback progr
     char cmd[1024];
     char output_template[512];
     snprintf(output_template, sizeof(output_template),
-             "%s/%s%s.%%(ext)s", TEMP_DIR, TEMP_PREFIX, video_id);
+             "%s/%s.%%(ext)s", g_download_dir, video_id);
 
     snprintf(cmd, sizeof(cmd),
-        "%s -f 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio' "
+        "%s -f 'bestaudio[ext=webm]/bestaudio[ext=ogg]/bestaudio' "
         "--no-playlist --progress --newline "
         "-o '%s' "
         "'https://www.youtube.com/watch?v=%s' "
@@ -261,8 +279,8 @@ const char* youtube_download(const char *video_id, YouTubeProgressCallback progr
         g_ytdlp_path, output_template, video_id);
 
     // Update expected file path (will check multiple extensions after download)
-    snprintf(g_temp_file, sizeof(g_temp_file),
-             "%s/%s%s.m4a", TEMP_DIR, TEMP_PREFIX, video_id);
+    snprintf(g_download_file, sizeof(g_download_file),
+             "%s/%s.webm", g_download_dir, video_id);
 
     printf("[YOUTUBE] Downloading: %s\n", video_id);
     printf("[YOUTUBE] Command: %s\n", cmd);
@@ -309,8 +327,8 @@ const char* youtube_download(const char *video_id, YouTubeProgressCallback progr
                 if (!progress_cb(percent, status)) {
                     // Cancelled
                     pclose(pipe);
-                    unlink(g_temp_file);
-                    g_temp_file[0] = '\0';
+                    unlink(g_download_file);
+                    g_download_file[0] = '\0';
                     snprintf(g_error, sizeof(g_error), "Download cancelled");
                     return NULL;
                 }
@@ -322,22 +340,22 @@ const char* youtube_download(const char *video_id, YouTubeProgressCallback progr
     int status = pclose(pipe);
 
     // Check if file was created (try multiple extensions)
-    // yt-dlp might output different formats depending on ffmpeg availability
-    if (access(g_temp_file, F_OK) != 0) {
+    // yt-dlp might output different formats depending on source
+    if (access(g_download_file, F_OK) != 0) {
         // Try alternative extensions
-        const char *alt_exts[] = {".m4a", ".opus", ".webm", ".ogg", NULL};
+        const char *alt_exts[] = {".webm", ".ogg", ".opus", ".m4a", NULL};
         char alt_path[512];
         bool found = false;
 
-        // Build base path without .mp3 extension
+        // Build base path without extension
         char base_path[512];
-        snprintf(base_path, sizeof(base_path), "%s/%s%s", TEMP_DIR, TEMP_PREFIX, video_id);
+        snprintf(base_path, sizeof(base_path), "%s/%s", g_download_dir, video_id);
 
         for (int i = 0; alt_exts[i]; i++) {
             snprintf(alt_path, sizeof(alt_path), "%s%s", base_path, alt_exts[i]);
             if (access(alt_path, F_OK) == 0) {
-                strncpy(g_temp_file, alt_path, sizeof(g_temp_file) - 1);
-                printf("[YOUTUBE] Downloaded (%s): %s\n", alt_exts[i] + 1, g_temp_file);
+                strncpy(g_download_file, alt_path, sizeof(g_download_file) - 1);
+                printf("[YOUTUBE] Downloaded (%s): %s\n", alt_exts[i] + 1, g_download_file);
                 found = true;
                 break;
             }
@@ -346,7 +364,7 @@ const char* youtube_download(const char *video_id, YouTubeProgressCallback progr
         if (!found) {
             snprintf(g_error, sizeof(g_error), "Download failed (exit: %d)", status);
             fprintf(stderr, "[YOUTUBE] Download failed, exit code: %d\n", status);
-            g_temp_file[0] = '\0';
+            g_download_file[0] = '\0';
             return NULL;
         }
     }
@@ -355,12 +373,12 @@ const char* youtube_download(const char *video_id, YouTubeProgressCallback progr
         progress_cb(100, "Download complete!");
     }
 
-    printf("[YOUTUBE] Downloaded: %s\n", g_temp_file);
-    return g_temp_file;
+    printf("[YOUTUBE] Downloaded: %s\n", g_download_file);
+    return g_download_file;
 }
 
 const char* youtube_get_temp_path(void) {
-    return g_temp_file[0] ? g_temp_file : NULL;
+    return g_download_file[0] ? g_download_file : NULL;
 }
 
 const char* youtube_get_error(void) {
@@ -382,4 +400,8 @@ void youtube_format_duration(int duration_sec, char *buffer) {
     } else {
         sprintf(buffer, "%d:%02d", mins, secs);
     }
+}
+
+const char* youtube_get_download_dir(void) {
+    return g_download_dir;
 }

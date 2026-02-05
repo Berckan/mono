@@ -77,6 +77,12 @@ bool audio_is_paused(void);
 void audio_seek(int seconds);
 
 /**
+ * Seek to absolute position
+ * @param position_sec Position in seconds from start
+ */
+void audio_seek_absolute(int position_sec);
+
+/**
  * Set volume level
  * @param volume Volume from 0 to 100
  */

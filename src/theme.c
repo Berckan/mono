@@ -7,9 +7,9 @@
 
 // Theme definitions
 static const ThemeColors THEMES[THEME_COUNT] = {
-    // THEME_DARK - Original deep blue retro theme
+    // THEME_DARK - Original dark theme
     {
-        .bg        = {16, 16, 32, 255},      // Deep Blue
+        .bg        = {18, 18, 18, 255},      // Near black (original)
         .text      = {255, 255, 255, 255},   // White
         .dim       = {140, 140, 170, 255},   // Light Blue-Gray
         .accent    = {51, 255, 51, 255},     // Neon Green
