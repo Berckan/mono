@@ -224,14 +224,17 @@ const char* youtube_download(const char *video_id, YouTubeProgressCallback progr
         g_temp_file[0] = '\0';
     }
 
-    // Build output path
-    snprintf(g_temp_file, sizeof(g_temp_file),
-             "%s/%s%s.mp3", TEMP_DIR, TEMP_PREFIX, video_id);
-
-    // Check if already downloaded (cache hit)
-    if (access(g_temp_file, F_OK) == 0) {
-        printf("[YOUTUBE] Using cached file: %s\n", g_temp_file);
-        return g_temp_file;
+    // Check if already downloaded (cache hit) - try common audio extensions
+    const char *cache_exts[] = {".m4a", ".webm", ".opus", ".mp3", ".ogg", NULL};
+    char cache_path[512];
+    for (int i = 0; cache_exts[i]; i++) {
+        snprintf(cache_path, sizeof(cache_path),
+                 "%s/%s%s%s", TEMP_DIR, TEMP_PREFIX, video_id, cache_exts[i]);
+        if (access(cache_path, F_OK) == 0) {
+            strncpy(g_temp_file, cache_path, sizeof(g_temp_file) - 1);
+            printf("[YOUTUBE] Using cached file: %s\n", g_temp_file);
+            return g_temp_file;
+        }
     }
 
     if (progress_cb) {
@@ -239,19 +242,27 @@ const char* youtube_download(const char *video_id, YouTubeProgressCallback progr
     }
 
     // Build yt-dlp download command
-    // -x: Extract audio
-    // --audio-format mp3: Convert to MP3 (fallback to m4a/opus if no ffmpeg)
-    // --audio-quality 5: Medium quality (faster)
+    // -f: Select best audio format (no ffmpeg needed)
     // --progress --newline: Machine-readable progress output
-    // -o: Output template (fixed extension for predictable path)
+    // -o: Output template with extension placeholder
+    // Note: We DON'T use -x (extract audio) because it requires ffmpeg
+    //       Instead we download the best audio-only format directly
     char cmd[1024];
+    char output_template[512];
+    snprintf(output_template, sizeof(output_template),
+             "%s/%s%s.%%(ext)s", TEMP_DIR, TEMP_PREFIX, video_id);
+
     snprintf(cmd, sizeof(cmd),
-        "%s -x --audio-format mp3 --audio-quality 5 "
+        "%s -f 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio' "
         "--no-playlist --progress --newline "
         "-o '%s' "
         "'https://www.youtube.com/watch?v=%s' "
         "2>&1",
-        g_ytdlp_path, g_temp_file, video_id);
+        g_ytdlp_path, output_template, video_id);
+
+    // Update expected file path (will check multiple extensions after download)
+    snprintf(g_temp_file, sizeof(g_temp_file),
+             "%s/%s%s.m4a", TEMP_DIR, TEMP_PREFIX, video_id);
 
     printf("[YOUTUBE] Downloading: %s\n", video_id);
     printf("[YOUTUBE] Command: %s\n", cmd);

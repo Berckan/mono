@@ -329,80 +329,78 @@ static void handle_input(AppState *state) {
             continue;
         }
 
-        // File menu overlay handling (before main switch)
-        // Uses continue to prevent same button press from being processed twice
-        // (fixes turbo-toggle bug where confirm dialog opens and closes immediately)
-        if (*state == STATE_FILE_MENU) {
-            if (filemenu_needs_confirm()) {
-                // In confirm dialog - only A/B work
-                if (action == INPUT_SELECT) {
-                    FileMenuResult result = filemenu_confirm_delete(true);
-                    if (result == FILEMENU_RESULT_DELETED) {
-                        browser_navigate_to(browser_get_current_path());
-                    }
-                    *state = STATE_BROWSER;
-                } else if (action == INPUT_BACK) {
-                    filemenu_confirm_delete(false);
-                    // Stay in file menu (g_confirm_pending is now false)
+        // Confirm dialog handling (separate state like help overlay)
+        if (*state == STATE_CONFIRM) {
+            if (action == INPUT_SELECT) {
+                FileMenuResult result = filemenu_confirm_delete(true);
+                if (result == FILEMENU_RESULT_DELETED) {
+                    browser_navigate_to(browser_get_current_path());
                 }
-                // Ignore other actions in confirm dialog
-            } else {
-                // In file menu - handle navigation
-                switch (action) {
-                    case INPUT_UP:
-                        filemenu_move_cursor(-1);
-                        break;
-                    case INPUT_DOWN:
-                        filemenu_move_cursor(1);
-                        break;
-                    case INPUT_SELECT:
-                        if (filemenu_select()) {
-                            int option = filemenu_get_actual_option();
-                            if (option == FILEMENU_RENAME) {
-                                filemenu_rename_init();
-                                *state = STATE_RENAME;
-                            } else if (option == FILEMENU_SCAN_METADATA) {
-                                // Initialize metadata scan
-                                strncpy(g_scan_folder, filemenu_get_path(), sizeof(g_scan_folder) - 1);
-                                g_scan_current = 0;
-                                g_scan_found = 0;
-                                g_scan_cancelled = false;
-                                g_scan_current_file[0] = '\0';
-
-                                // Count audio files in folder
-                                g_scan_total = 0;
-                                DIR *dir = opendir(g_scan_folder);
-                                if (dir) {
-                                    struct dirent *entry;
-                                    while ((entry = readdir(dir)) != NULL) {
-                                        if (entry->d_name[0] == '.') continue;
-                                        const char *ext = strrchr(entry->d_name, '.');
-                                        if (ext && (strcasecmp(ext, ".mp3") == 0 ||
-                                                    strcasecmp(ext, ".flac") == 0 ||
-                                                    strcasecmp(ext, ".ogg") == 0 ||
-                                                    strcasecmp(ext, ".wav") == 0)) {
-                                            g_scan_total++;
-                                        }
-                                    }
-                                    closedir(dir);
-                                }
-
-                                *state = STATE_SCANNING;
-                            } else if (option == FILEMENU_CANCEL) {
-                                *state = STATE_BROWSER;
-                            }
-                        }
-                        // If filemenu_select() returned false, confirm is now pending
-                        // Next frame will enter the confirm dialog branch above
-                        break;
-                    case INPUT_BACK:
-                        *state = STATE_BROWSER;
-                        break;
-                    default:
-                        break;
-                }
+                *state = STATE_BROWSER;
+            } else if (action == INPUT_BACK) {
+                filemenu_confirm_delete(false);
+                *state = STATE_FILE_MENU;  // Back to file menu
             }
-            continue;  // CRITICAL: Prevent same event from being processed twice
+            continue;  // Don't process other actions in confirm
+        }
+
+        // File menu handling
+        if (*state == STATE_FILE_MENU) {
+            switch (action) {
+                case INPUT_UP:
+                    filemenu_move_cursor(-1);
+                    break;
+                case INPUT_DOWN:
+                    filemenu_move_cursor(1);
+                    break;
+                case INPUT_SELECT:
+                    if (filemenu_select()) {
+                        int option = filemenu_get_actual_option();
+                        if (option == FILEMENU_RENAME) {
+                            filemenu_rename_init();
+                            *state = STATE_RENAME;
+                        } else if (option == FILEMENU_SCAN_METADATA) {
+                            // Initialize metadata scan
+                            strncpy(g_scan_folder, filemenu_get_path(), sizeof(g_scan_folder) - 1);
+                            g_scan_current = 0;
+                            g_scan_found = 0;
+                            g_scan_cancelled = false;
+                            g_scan_current_file[0] = '\0';
+
+                            // Count audio files in folder
+                            g_scan_total = 0;
+                            DIR *dir = opendir(g_scan_folder);
+                            if (dir) {
+                                struct dirent *entry;
+                                while ((entry = readdir(dir)) != NULL) {
+                                    if (entry->d_name[0] == '.') continue;
+                                    const char *ext = strrchr(entry->d_name, '.');
+                                    if (ext && (strcasecmp(ext, ".mp3") == 0 ||
+                                                strcasecmp(ext, ".flac") == 0 ||
+                                                strcasecmp(ext, ".ogg") == 0 ||
+                                                strcasecmp(ext, ".wav") == 0)) {
+                                        g_scan_total++;
+                                    }
+                                }
+                                closedir(dir);
+                            }
+
+                            *state = STATE_SCANNING;
+                        } else if (option == FILEMENU_CANCEL) {
+                            *state = STATE_BROWSER;
+                        }
+                    } else {
+                        // Delete selected - transition to confirm state (like help overlay)
+                        *state = STATE_CONFIRM;
+                    }
+                    break;
+                case INPUT_BACK:
+                    *state = STATE_BROWSER;
+                    break;
+                default:
+                    break;
+            }
+            continue;
         }
 
         switch (*state) {
@@ -916,11 +914,10 @@ static void render(AppState *state) {
             ui_render_help_player();
             break;
         case STATE_FILE_MENU:
-            if (filemenu_needs_confirm()) {
-                ui_render_confirm_delete();  // Standalone render, no file_menu needed
-            } else {
-                ui_render_file_menu();
-            }
+            ui_render_file_menu();
+            break;
+        case STATE_CONFIRM:
+            ui_render_confirm_delete();
             break;
         case STATE_RENAME:
             ui_render_rename();
