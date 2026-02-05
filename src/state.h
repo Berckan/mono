@@ -29,6 +29,7 @@ typedef struct {
     bool shuffle;                 // Shuffle mode enabled
     RepeatMode repeat;            // Repeat mode (OFF/ONE/ALL)
     ThemeId theme;                // UI theme (DARK/LIGHT)
+    PowerMode power_mode;         // Power mode (BATTERY/BALANCED/PERFORMANCE)
 
     // State flags
     bool was_playing;             // Was playback active when app closed

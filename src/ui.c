@@ -143,10 +143,155 @@ static Uint32 g_monkey_last_update = 0;
 #define MONKEY_FRAME_MS 200  // ms per frame
 #define MONKEY_PIXEL_SIZE 3  // scale factor
 
+// Toast notification state
+static char g_toast_message[128] = {0};
+static Uint32 g_toast_start_time = 0;
+#define UI_TOAST_DURATION_MS 2000
+
+// Forward declaration for toast rendering
+static void render_toast_overlay(void);
+
 // Monkey colors
 static const SDL_Color COLOR_MONKEY_BROWN = {139, 90, 43, 255};   // Brown fur
 static const SDL_Color COLOR_MONKEY_BEIGE = {222, 184, 135, 255}; // Beige face/belly
 static const SDL_Color COLOR_MONKEY_BLACK = {30, 30, 30, 255};    // Black eyes/nose
+
+// ============================================================================
+// TEXT CACHING SYSTEM
+// Reduces TTF_RenderUTF8_Blended calls from 50+/frame to ~5/frame
+// LRU cache with 64 entries, expires textures after 5 seconds of non-use
+// ============================================================================
+#define TEXT_CACHE_SIZE 64
+#define TEXT_CACHE_EXPIRE_MS 5000  // 5 seconds
+
+typedef struct {
+    char text[128];
+    SDL_Color color;
+    TTF_Font *font;
+    SDL_Texture *texture;
+    int width, height;
+    Uint32 last_used;
+    bool in_use;
+} CachedText;
+
+static CachedText g_text_cache[TEXT_CACHE_SIZE];
+static int g_text_cache_hits = 0;
+static int g_text_cache_misses = 0;
+
+/**
+ * Initialize text cache
+ */
+static void text_cache_init(void) {
+    memset(g_text_cache, 0, sizeof(g_text_cache));
+}
+
+/**
+ * Clear all cached textures (call on theme change or cleanup)
+ */
+static void text_cache_clear(void) {
+    for (int i = 0; i < TEXT_CACHE_SIZE; i++) {
+        if (g_text_cache[i].texture) {
+            SDL_DestroyTexture(g_text_cache[i].texture);
+            g_text_cache[i].texture = NULL;
+        }
+        g_text_cache[i].in_use = false;
+    }
+}
+
+/**
+ * Expire old cache entries (call periodically)
+ */
+static void text_cache_expire(void) {
+    Uint32 now = SDL_GetTicks();
+    for (int i = 0; i < TEXT_CACHE_SIZE; i++) {
+        if (g_text_cache[i].in_use &&
+            now - g_text_cache[i].last_used > TEXT_CACHE_EXPIRE_MS) {
+            if (g_text_cache[i].texture) {
+                SDL_DestroyTexture(g_text_cache[i].texture);
+                g_text_cache[i].texture = NULL;
+            }
+            g_text_cache[i].in_use = false;
+        }
+    }
+}
+
+/**
+ * Find or create cached texture for text
+ * @return Texture pointer (do NOT destroy - managed by cache)
+ */
+static SDL_Texture* text_cache_get(const char *text, TTF_Font *font, SDL_Color color,
+                                   int *out_w, int *out_h) {
+    if (!text || !text[0]) return NULL;
+
+    Uint32 now = SDL_GetTicks();
+
+    // Search for existing entry
+    for (int i = 0; i < TEXT_CACHE_SIZE; i++) {
+        if (g_text_cache[i].in_use &&
+            g_text_cache[i].font == font &&
+            g_text_cache[i].color.r == color.r &&
+            g_text_cache[i].color.g == color.g &&
+            g_text_cache[i].color.b == color.b &&
+            strcmp(g_text_cache[i].text, text) == 0) {
+            // Cache hit
+            g_text_cache[i].last_used = now;
+            g_text_cache_hits++;
+            *out_w = g_text_cache[i].width;
+            *out_h = g_text_cache[i].height;
+            return g_text_cache[i].texture;
+        }
+    }
+
+    // Cache miss - find free slot or evict oldest
+    int slot = -1;
+    Uint32 oldest_time = now;
+
+    for (int i = 0; i < TEXT_CACHE_SIZE; i++) {
+        if (!g_text_cache[i].in_use) {
+            slot = i;
+            break;
+        }
+        if (g_text_cache[i].last_used < oldest_time) {
+            oldest_time = g_text_cache[i].last_used;
+            slot = i;
+        }
+    }
+
+    if (slot < 0) slot = 0;  // Shouldn't happen, but safety first
+
+    // Evict old entry if needed
+    if (g_text_cache[slot].texture) {
+        SDL_DestroyTexture(g_text_cache[slot].texture);
+    }
+
+    // Create new entry
+    SDL_Surface *surface = TTF_RenderUTF8_Blended(font, text, color);
+    if (!surface) return NULL;
+
+    SDL_Texture *texture = SDL_CreateTextureFromSurface(g_renderer, surface);
+    if (!texture) {
+        SDL_FreeSurface(surface);
+        return NULL;
+    }
+
+    // Store in cache
+    strncpy(g_text_cache[slot].text, text, sizeof(g_text_cache[slot].text) - 1);
+    g_text_cache[slot].text[sizeof(g_text_cache[slot].text) - 1] = '\0';
+    g_text_cache[slot].color = color;
+    g_text_cache[slot].font = font;
+    g_text_cache[slot].texture = texture;
+    g_text_cache[slot].width = surface->w;
+    g_text_cache[slot].height = surface->h;
+    g_text_cache[slot].last_used = now;
+    g_text_cache[slot].in_use = true;
+
+    SDL_FreeSurface(surface);
+    g_text_cache_misses++;
+
+    *out_w = g_text_cache[slot].width;
+    *out_h = g_text_cache[slot].height;
+    return texture;
+}
 
 /**
  * Render dancing monkey sprite
@@ -248,22 +393,18 @@ static int load_fonts(void) {
 }
 
 /**
- * Render text to screen
+ * Render text to screen (cached version)
+ * Uses LRU text cache to avoid repeated TTF rendering
  */
 static void render_text(const char *text, int x, int y, TTF_Font *font, SDL_Color color) {
     if (!text || !text[0]) return;
 
-    SDL_Surface *surface = TTF_RenderUTF8_Blended(font, text, color);
-    if (!surface) return;
-
-    SDL_Texture *texture = SDL_CreateTextureFromSurface(g_renderer, surface);
+    int w, h;
+    SDL_Texture *texture = text_cache_get(text, font, color, &w, &h);
     if (texture) {
-        SDL_Rect dest = {x, y, surface->w, surface->h};
+        SDL_Rect dest = {x, y, w, h};
         SDL_RenderCopy(g_renderer, texture, NULL, &dest);
-        SDL_DestroyTexture(texture);
     }
-
-    SDL_FreeSurface(surface);
 }
 
 /**
@@ -502,19 +643,6 @@ static void render_status_bar(void) {
         snprintf(vol_str, sizeof(vol_str), "Vol:--");
     }
     render_text(vol_str, g_screen_width - 280 - right_margin, text_y, g_font_small, COLOR_TEXT);
-
-    // Download queue indicator (to the left of volume)
-    int pending = dlqueue_pending_count();
-    if (pending > 0) {
-        char dl_str[32];
-        int progress = dlqueue_get_progress();
-        if (progress >= 0) {
-            snprintf(dl_str, sizeof(dl_str), "DL:%d%% (%d)", progress, pending);
-        } else {
-            snprintf(dl_str, sizeof(dl_str), "DL:(%d)", pending);
-        }
-        render_text(dl_str, g_screen_width - 450 - right_margin, text_y, g_font_small, COLOR_ACCENT);
-    }
 }
 
 int ui_init(int width, int height) {
@@ -579,10 +707,14 @@ int ui_init(int width, int height) {
     // Initialize cover art system
     cover_init(g_renderer);
 
+    // Initialize text cache
+    text_cache_init();
+
     return 0;
 }
 
 void ui_cleanup(void) {
+    text_cache_clear();  // Clear text cache before destroying renderer
     cover_cleanup();
     if (g_font_large) TTF_CloseFont(g_font_large);
     if (g_font_medium) TTF_CloseFont(g_font_medium);
@@ -592,12 +724,33 @@ void ui_cleanup(void) {
 }
 
 void ui_render_browser(void) {
+    // Periodically expire old cache entries
+    static Uint32 last_cache_expire = 0;
+    Uint32 now = SDL_GetTicks();
+    if (now - last_cache_expire > 1000) {  // Check every second
+        text_cache_expire();
+        last_cache_expire = now;
+    }
+
     // Clear screen
     SDL_SetRenderDrawColor(g_renderer, COLOR_BG.r, COLOR_BG.g, COLOR_BG.b, 255);
     SDL_RenderClear(g_renderer);
 
     // Header
     render_text("> Mono", MARGIN, 8, g_font_medium, COLOR_TEXT);
+
+    // Download indicator (next to MONO, grows right)
+    int pending = dlqueue_pending_count();
+    if (pending > 0) {
+        char dl_str[32];
+        int progress = dlqueue_get_progress();
+        if (progress >= 0) {
+            snprintf(dl_str, sizeof(dl_str), "DL:%d%% (%d)", progress, pending);
+        } else {
+            snprintf(dl_str, sizeof(dl_str), "DL:(%d)", pending);
+        }
+        render_text(dl_str, MARGIN + 180, 16, g_font_small, COLOR_ACCENT);
+    }
 
     // Status bar (volume + battery) in top right
     render_status_bar();
@@ -769,6 +922,24 @@ static void ui_render_player_content(void) {
         }
     }
 
+    // Download indicator (next to MONO/monkey, grows right)
+    int pending = dlqueue_pending_count();
+    if (pending > 0) {
+        char dl_str[32];
+        int progress = dlqueue_get_progress();
+        if (progress >= 0) {
+            snprintf(dl_str, sizeof(dl_str), "DL:%d%% (%d)", progress, pending);
+        } else {
+            snprintf(dl_str, sizeof(dl_str), "DL:(%d)", pending);
+        }
+        // Position after favorite "*" (220) + padding
+        if (has_cover_bg) {
+            render_text_shadow(dl_str, 300, 16, g_font_small, cover_accent);
+        } else {
+            render_text(dl_str, 300, 16, g_font_small, COLOR_ACCENT);
+        }
+    }
+
     // Status bar (volume + battery) in top right
     render_status_bar();
 
@@ -908,7 +1079,7 @@ void ui_render_menu(void) {
 
     // Menu box (compact for 720p)
     int menu_w = 500;
-    int menu_h = 420;  // Height for 6 items (Shuffle, Repeat, Sleep, Theme, YouTube, Exit)
+    int menu_h = 470;  // Height for 7 items (Shuffle, Repeat, Sleep, Power, Theme, YouTube, Exit)
     int menu_x = (g_screen_width - menu_w) / 2;
     int menu_y = (g_screen_height - menu_h) / 2;
 
@@ -947,6 +1118,16 @@ void ui_render_menu(void) {
     // Sleep Timer
     snprintf(buf, sizeof(buf), "Sleep: %s", menu_get_sleep_string());
     if (cursor == MENU_SLEEP) {
+        draw_rect(menu_x + 16, item_y - 4, menu_w - 32, item_h, COLOR_ACCENT);
+        render_text(buf, menu_x + 32, item_y, g_font_small, COLOR_BG);
+    } else {
+        render_text(buf, menu_x + 32, item_y, g_font_small, COLOR_DIM);
+    }
+    item_y += item_h;
+
+    // Power Mode
+    snprintf(buf, sizeof(buf), "Power: %s", menu_get_power_string());
+    if (cursor == MENU_POWER) {
         draw_rect(menu_x + 16, item_y - 4, menu_w - 32, item_h, COLOR_ACCENT);
         render_text(buf, menu_x + 32, item_y, g_font_small, COLOR_BG);
     } else {
@@ -1624,11 +1805,14 @@ void ui_render_youtube_results(void) {
     int pending = dlqueue_pending_count();
     if (pending > 0) {
         char hint[64];
-        snprintf(hint, sizeof(hint), "A: Add to queue (%d)   B: Back", pending);
+        snprintf(hint, sizeof(hint), "A:Add (%d)  X:Queue  B:Back", pending);
         render_text(hint, MARGIN, g_screen_height - 25, g_font_small, COLOR_DIM);
     } else {
-        render_text("A: Add to queue   B: Back", MARGIN, g_screen_height - 25, g_font_small, COLOR_DIM);
+        render_text("A:Add to queue  X:View queue  B:Back", MARGIN, g_screen_height - 25, g_font_small, COLOR_DIM);
     }
+
+    // Render toast overlay before present
+    render_toast_overlay();
 
     SDL_RenderPresent(g_renderer);
 }
@@ -1700,4 +1884,222 @@ void ui_render_youtube_download(void) {
     render_text_centered("B: Cancel", g_screen_height - 60, g_font_small, COLOR_DIM);
 
     SDL_RenderPresent(g_renderer);
+}
+
+void ui_render_download_queue(void) {
+    // Clear screen
+    SDL_SetRenderDrawColor(g_renderer, COLOR_BG.r, COLOR_BG.g, COLOR_BG.b, 255);
+    SDL_RenderClear(g_renderer);
+
+    // Header
+    int pending = dlqueue_pending_count();
+    int total = dlqueue_total_count();
+    char header[128];
+    snprintf(header, sizeof(header), "Download Queue (%d pending, %d total)", pending, total);
+    render_text(header, MARGIN, 8, g_font_small, COLOR_TEXT);
+
+    // Empty state
+    if (total == 0) {
+        render_text_centered("Queue is empty", g_screen_height / 2 - 40, g_font_medium, COLOR_DIM);
+        render_text_centered("Press A on search results to add downloads", g_screen_height / 2 + 20, g_font_small, COLOR_DIM);
+        render_text_centered("B: Back", g_screen_height - 60, g_font_small, COLOR_DIM);
+        SDL_RenderPresent(g_renderer);
+        return;
+    }
+
+    // Queue list
+    int cursor = dlqueue_view_get_cursor();
+    int scroll = dlqueue_view_get_scroll_offset();
+    int visible = 8;
+    int y = HEADER_HEIGHT + 10;
+
+    for (int i = 0; i < visible && (scroll + i) < total; i++) {
+        int idx = scroll + i;
+        const DownloadItem *item = dlqueue_get_item(idx);
+        if (!item) continue;
+
+        bool is_selected = (idx == cursor);
+
+        // Highlight selected item
+        if (is_selected) {
+            draw_rect(0, y - 5, g_screen_width, LINE_HEIGHT + 10, COLOR_HIGHLIGHT);
+        }
+
+        // Status icon
+        const char *status_icon;
+        SDL_Color status_color;
+        switch (item->status) {
+            case DL_PENDING:
+                status_icon = "[...]";
+                status_color = COLOR_DIM;
+                break;
+            case DL_DOWNLOADING:
+                status_icon = "[>>]";
+                status_color = COLOR_ACCENT;
+                break;
+            case DL_COMPLETE:
+                status_icon = "[OK]";
+                status_color = COLOR_ACCENT;
+                break;
+            case DL_FAILED:
+                status_icon = "[X]";
+                status_color = COLOR_ERROR;
+                break;
+            default:
+                status_icon = "[?]";
+                status_color = COLOR_DIM;
+                break;
+        }
+
+        render_text(status_icon, MARGIN, y, g_font_small, status_color);
+
+        // Title (truncated)
+        char title_display[64];
+        if (strlen(item->title) > 45) {
+            snprintf(title_display, sizeof(title_display), "%.42s...", item->title);
+        } else {
+            strncpy(title_display, item->title, sizeof(title_display) - 1);
+            title_display[sizeof(title_display) - 1] = '\0';
+        }
+
+        render_text(title_display, MARGIN + 70, y, g_font_small,
+                   is_selected ? COLOR_ACCENT : COLOR_TEXT);
+
+        // Progress bar for downloading items
+        if (item->status == DL_DOWNLOADING) {
+            int bar_x = g_screen_width - MARGIN - 150;
+            int bar_w = 130;
+            int bar_h = 16;
+            int bar_y_offset = y + 4;
+
+            // Background
+            draw_rect(bar_x, bar_y_offset, bar_w, bar_h, COLOR_DIM);
+
+            // Fill
+            if (item->progress > 0) {
+                int fill_w = (bar_w - 4) * item->progress / 100;
+                draw_rect(bar_x + 2, bar_y_offset + 2, fill_w, bar_h - 4, COLOR_ACCENT);
+            }
+
+            // Percentage text
+            char pct[8];
+            snprintf(pct, sizeof(pct), "%d%%", item->progress);
+            render_text(pct, bar_x + bar_w + 5, y, g_font_small, COLOR_DIM);
+        }
+
+        // Channel name on second line
+        char meta_display[128];
+        if (item->status == DL_FAILED && item->error[0]) {
+            snprintf(meta_display, sizeof(meta_display), "%.30s - Error: %.30s",
+                     item->channel, item->error);
+        } else {
+            snprintf(meta_display, sizeof(meta_display), "%.50s", item->channel);
+        }
+        render_text(meta_display, MARGIN + 80, y + 28, g_font_small, COLOR_DIM);
+
+        y += LINE_HEIGHT + 10;
+    }
+
+    // Scroll indicators
+    if (scroll > 0) {
+        render_text_centered("^ more ^", HEADER_HEIGHT - 5, g_font_small, COLOR_DIM);
+    }
+    if (scroll + visible < total) {
+        render_text_centered("v more v", g_screen_height - 90, g_font_small, COLOR_DIM);
+    }
+
+    // Footer - cursor position
+    char footer[64];
+    snprintf(footer, sizeof(footer), "%d of %d", cursor + 1, total);
+    render_text_centered(footer, g_screen_height - 65, g_font_small, COLOR_DIM);
+
+    // Controls hint
+    render_text("A:Play  Y:Clear completed  X:Cancel  B:Back",
+               MARGIN, g_screen_height - 25, g_font_small, COLOR_DIM);
+
+    // Render toast overlay before present
+    render_toast_overlay();
+
+    SDL_RenderPresent(g_renderer);
+}
+
+/**
+ * Internal: Render toast overlay (call before SDL_RenderPresent)
+ */
+static void render_toast_overlay(void) {
+    if (g_toast_message[0] == '\0') return;
+
+    Uint32 now = SDL_GetTicks();
+    Uint32 elapsed_ms = now - g_toast_start_time;
+
+    if (elapsed_ms >= UI_TOAST_DURATION_MS) {
+        g_toast_message[0] = '\0';  // Clear expired toast
+        return;
+    }
+
+    // Fade out in last 500ms
+    #define TOAST_FADE_MS 500
+
+    int alpha = 255;
+    if (elapsed_ms > UI_TOAST_DURATION_MS - TOAST_FADE_MS) {
+        alpha = 255 * (UI_TOAST_DURATION_MS - elapsed_ms) / TOAST_FADE_MS;
+        if (alpha < 0) alpha = 0;
+    }
+
+    // Calculate text width for background box
+    int text_w, text_h;
+    TTF_SizeUTF8(g_font_small, g_toast_message, &text_w, &text_h);
+
+    int box_w = text_w + 40;
+    int box_h = text_h + 20;
+    int box_x = (g_screen_width - box_w) / 2;
+    int box_y = g_screen_height - 120;
+
+    // Semi-transparent background
+    SDL_SetRenderDrawBlendMode(g_renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(g_renderer, 40, 40, 40, (Uint8)(alpha * 0.9));
+    SDL_Rect bg_rect = {box_x, box_y, box_w, box_h};
+    SDL_RenderFillRect(g_renderer, &bg_rect);
+
+    // Border
+    SDL_SetRenderDrawColor(g_renderer, COLOR_ACCENT.r, COLOR_ACCENT.g, COLOR_ACCENT.b, (Uint8)alpha);
+    SDL_RenderDrawRect(g_renderer, &bg_rect);
+
+    // Text (centered in box)
+    SDL_Color text_color = {COLOR_TEXT.r, COLOR_TEXT.g, COLOR_TEXT.b, (Uint8)alpha};
+    SDL_Surface *surface = TTF_RenderUTF8_Blended(g_font_small, g_toast_message, text_color);
+    if (surface) {
+        SDL_Texture *texture = SDL_CreateTextureFromSurface(g_renderer, surface);
+        if (texture) {
+            SDL_SetTextureAlphaMod(texture, (Uint8)alpha);
+            SDL_Rect dest = {
+                box_x + (box_w - text_w) / 2,
+                box_y + (box_h - text_h) / 2,
+                text_w,
+                text_h
+            };
+            SDL_RenderCopy(g_renderer, texture, NULL, &dest);
+            SDL_DestroyTexture(texture);
+        }
+        SDL_FreeSurface(surface);
+    }
+}
+
+void ui_show_toast(const char *message) {
+    if (!message) {
+        g_toast_message[0] = '\0';
+        return;
+    }
+    strncpy(g_toast_message, message, sizeof(g_toast_message) - 1);
+    g_toast_message[sizeof(g_toast_message) - 1] = '\0';
+    g_toast_start_time = SDL_GetTicks();
+}
+
+bool ui_toast_active(void) {
+    if (g_toast_message[0] == '\0') return false;
+    return (SDL_GetTicks() - g_toast_start_time) < UI_TOAST_DURATION_MS;
+}
+
+const char* ui_get_toast_message(void) {
+    return g_toast_message[0] ? g_toast_message : NULL;
 }

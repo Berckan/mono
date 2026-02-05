@@ -5,6 +5,9 @@
 #ifndef UI_H
 #define UI_H
 
+#include <stdbool.h>
+#include <SDL2/SDL.h>
+
 /**
  * Initialize UI system
  * @param width Screen width
@@ -100,5 +103,26 @@ void ui_render_youtube_results(void);
  * Render YouTube download progress
  */
 void ui_render_youtube_download(void);
+
+/**
+ * Render download queue list view
+ */
+void ui_render_download_queue(void);
+
+/**
+ * Show a toast notification
+ * @param message Toast message text
+ */
+void ui_show_toast(const char *message);
+
+/**
+ * Check if toast should still be visible
+ */
+bool ui_toast_active(void);
+
+/**
+ * Get toast message (for external use)
+ */
+const char* ui_get_toast_message(void);
 
 #endif // UI_H

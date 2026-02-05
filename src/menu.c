@@ -12,6 +12,7 @@
 static int g_cursor = 0;
 static bool g_shuffle = false;
 static RepeatMode g_repeat = REPEAT_OFF;
+static PowerMode g_power_mode = POWER_MODE_BALANCED;
 static int g_sleep_minutes = 0;  // 0, 15, 30, 60
 static Uint32 g_sleep_end_ticks = 0;
 static bool g_youtube_selected = false;
@@ -25,6 +26,7 @@ void menu_init(void) {
     g_cursor = 0;
     g_shuffle = false;
     g_repeat = REPEAT_OFF;
+    g_power_mode = POWER_MODE_BALANCED;
     g_sleep_minutes = 0;
     g_sleep_end_ticks = 0;
     g_sleep_option_index = 0;
@@ -58,6 +60,11 @@ bool menu_select(void) {
                 g_sleep_end_ticks = 0;
                 printf("[MENU] Sleep timer: OFF\n");
             }
+            break;
+
+        case MENU_POWER:
+            g_power_mode = (g_power_mode + 1) % 3;
+            printf("[MENU] Power mode: %s\n", menu_get_power_string());
             break;
 
         case MENU_THEME:
@@ -153,4 +160,22 @@ bool menu_youtube_selected(void) {
 
 void menu_reset_youtube(void) {
     g_youtube_selected = false;
+}
+
+PowerMode menu_get_power_mode(void) {
+    return g_power_mode;
+}
+
+void menu_set_power_mode(PowerMode mode) {
+    g_power_mode = mode;
+    printf("[MENU] Power mode set to: %s\n", menu_get_power_string());
+}
+
+const char* menu_get_power_string(void) {
+    switch (g_power_mode) {
+        case POWER_MODE_BATTERY:     return "Battery";
+        case POWER_MODE_BALANCED:    return "Balanced";
+        case POWER_MODE_PERFORMANCE: return "Performance";
+        default: return "Balanced";
+    }
 }

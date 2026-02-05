@@ -319,7 +319,7 @@ const char* ytsearch_update_download(void) {
 
     // Perform download (blocking with progress callback)
     const YouTubeResult *result = &g_results[g_results_cursor];
-    g_downloaded_path = youtube_download(result->id, download_progress_callback);
+    g_downloaded_path = youtube_download(result->id, result->title, download_progress_callback);
 
     if (!g_downloaded_path) {
         const char *err = youtube_get_error();

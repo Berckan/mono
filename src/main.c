@@ -57,6 +57,7 @@ typedef enum {
     STATE_YOUTUBE_SEARCH,   // YouTube search input
     STATE_YOUTUBE_RESULTS,  // YouTube results list
     STATE_YOUTUBE_DOWNLOAD, // YouTube download progress
+    STATE_DOWNLOAD_QUEUE,   // Download queue list view
     STATE_ERROR         // Error loading file
 } AppState;
 
@@ -227,6 +228,7 @@ static void save_app_state(void) {
     state_data.shuffle = menu_is_shuffle_enabled();
     state_data.repeat = menu_get_repeat_mode();
     state_data.theme = theme_get_current();
+    state_data.power_mode = menu_get_power_mode();
 
     // Was playing?
     state_data.was_playing = audio_is_playing() || audio_is_paused();
@@ -708,15 +710,88 @@ static void handle_input(AppState *state) {
                         if (result) {
                             if (dlqueue_add(result->id, result->title, result->channel)) {
                                 printf("[MAIN] Added to queue: %s\n", result->title);
+                                // Show toast notification
+                                char toast[128];
+                                int pending = dlqueue_pending_count();
+                                snprintf(toast, sizeof(toast), "Added to queue (%d pending)", pending);
+                                ui_show_toast(toast);
+                            } else {
+                                // Already in queue or queue full
+                                if (dlqueue_is_queued(result->id)) {
+                                    ui_show_toast("Already in queue");
+                                } else {
+                                    ui_show_toast("Queue full (max 20)");
+                                }
                             }
                         }
                         // Stay in results - user can add more
                         break;
                     }
+                    case INPUT_HELP:
+                        // X button - open download queue view
+                        dlqueue_view_init();
+                        *state = STATE_DOWNLOAD_QUEUE;
+                        break;
                     case INPUT_BACK:
                         // Go back to search input
                         ytsearch_set_state(YTSEARCH_INPUT);
                         *state = STATE_YOUTUBE_SEARCH;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+
+            case STATE_DOWNLOAD_QUEUE:
+                switch (action) {
+                    case INPUT_UP:
+                        dlqueue_view_move_cursor(-1);
+                        break;
+                    case INPUT_DOWN:
+                        dlqueue_view_move_cursor(1);
+                        break;
+                    case INPUT_SELECT: {
+                        // Play completed item
+                        if (dlqueue_view_action_select()) {
+                            const char *filepath = dlqueue_view_get_selected_path();
+                            if (filepath) {
+                                // Navigate browser to downloaded file's directory and play
+                                char dir[512];
+                                strncpy(dir, filepath, sizeof(dir) - 1);
+                                char *last_slash = strrchr(dir, '/');
+                                if (last_slash) {
+                                    *last_slash = '\0';
+                                    browser_navigate_to(dir);
+                                    // Find and select the file
+                                    const char *filename = last_slash + 1;
+                                    int count = browser_get_count();
+                                    for (int i = 0; i < count; i++) {
+                                        const FileEntry *entry = browser_get_entry(i);
+                                        if (entry && strcmp(entry->name, filename) == 0) {
+                                            browser_set_cursor(i);
+                                            break;
+                                        }
+                                    }
+                                }
+                                if (play_file(filepath)) {
+                                    *state = STATE_PLAYING;
+                                }
+                            }
+                        }
+                        break;
+                    }
+                    case INPUT_HELP:
+                        // X button - cancel selected (pending only)
+                        if (dlqueue_view_action_cancel()) {
+                            ui_show_toast("Download cancelled");
+                        }
+                        break;
+                    case INPUT_FAVORITE:
+                        // Y button - clear completed/failed
+                        dlqueue_clear_completed();
+                        break;
+                    case INPUT_BACK:
+                        *state = STATE_YOUTUBE_RESULTS;
                         break;
                     default:
                         break;
@@ -946,6 +1021,9 @@ static void render(AppState *state) {
         case STATE_YOUTUBE_DOWNLOAD:
             ui_render_youtube_download();
             break;
+        case STATE_DOWNLOAD_QUEUE:
+            ui_render_download_queue();
+            break;
         case STATE_ERROR:
             ui_render_error(g_error_message);
             break;
@@ -1058,6 +1136,7 @@ int main(int argc, char *argv[]) {
         menu_set_shuffle(saved_state.shuffle);
         menu_set_repeat(saved_state.repeat);
         theme_set(saved_state.theme);
+        menu_set_power_mode(saved_state.power_mode);
 
         // Try to resume playback if there was an active track
         if (saved_state.has_resume_data && saved_state.last_file[0]) {
@@ -1092,25 +1171,47 @@ int main(int argc, char *argv[]) {
     printf("Mono - Initialized successfully\n");
 
     // Adaptive frame rate for energy efficiency:
-    // - 60fps when playing (progress bar, monkey animation)
-    // - 30fps in browser/menu (responsive but power efficient)
-    // - 10fps when screen dimmed (minimal updates)
+    // Frame rates depend on power mode setting:
+    // - Battery:     20fps active, 10fps dimmed
+    // - Balanced:    30fps active, 10fps dimmed (default)
+    // - Performance: 60fps active, 20fps dimmed
     Uint32 frame_start;
     AppState prev_state = g_state;
 
     while (g_running) {
         frame_start = SDL_GetTicks();
 
-        // Determine target frame time based on current activity
+        // Determine target frame time based on power mode and activity
         Uint32 target_frame_ms;
+        PowerMode power = menu_get_power_mode();
+
         if (screen_is_dimmed()) {
-            target_frame_ms = 100;  // 10fps - screen dimmed, minimal updates
+            // Screen dimmed - minimal updates regardless of mode
+            target_frame_ms = (power == POWER_MODE_PERFORMANCE) ? 50 : 100;  // 20fps or 10fps
         } else if (g_state == STATE_PLAYING && audio_is_playing()) {
-            target_frame_ms = 16;   // 60fps - need smooth progress bar & animation
+            // Active playback - smooth progress bar & animation
+            switch (power) {
+                case POWER_MODE_BATTERY:     target_frame_ms = 50;  break;  // 20fps
+                case POWER_MODE_BALANCED:    target_frame_ms = 33;  break;  // 30fps
+                case POWER_MODE_PERFORMANCE: target_frame_ms = 16;  break;  // 60fps
+                default:                     target_frame_ms = 33;  break;
+            }
         } else if (g_state == STATE_PLAYING && audio_is_paused()) {
-            target_frame_ms = 50;   // 20fps - paused, less urgent
+            // Paused - less urgent
+            switch (power) {
+                case POWER_MODE_BATTERY:     target_frame_ms = 100; break;  // 10fps
+                case POWER_MODE_BALANCED:    target_frame_ms = 50;  break;  // 20fps
+                case POWER_MODE_PERFORMANCE: target_frame_ms = 33;  break;  // 30fps
+                default:                     target_frame_ms = 50;  break;
+            }
         } else {
-            target_frame_ms = 33;   // 30fps - browser/menu, balanced
+            // Browser/menu - balanced responsiveness
+            switch (power) {
+                case POWER_MODE_BATTERY:     target_frame_ms = 50;  break;  // 20fps
+                case POWER_MODE_BALANCED:    target_frame_ms = 33;  break;  // 30fps
+                case POWER_MODE_PERFORMANCE: target_frame_ms = 16;  break;  // 60fps
+                default:                     target_frame_ms = 33;  break;
+            }
         }
 
         handle_input(&g_state);

@@ -97,16 +97,18 @@ static void* worker_thread_func(void *arg) {
 
         // Get item info (copy to local vars while holding lock)
         char video_id[16];
+        char title[256];
         strncpy(video_id, g_queue[g_current_index].video_id, sizeof(video_id) - 1);
         video_id[sizeof(video_id) - 1] = '\0';
+        strncpy(title, g_queue[g_current_index].title, sizeof(title) - 1);
+        title[sizeof(title) - 1] = '\0';
 
-        printf("[DLQUEUE] Starting download: %s - %s\n",
-               video_id, g_queue[g_current_index].title);
+        printf("[DLQUEUE] Starting download: %s - %s\n", video_id, title);
 
         pthread_mutex_unlock(&g_queue_mutex);
 
         // Perform download (blocking, but in worker thread)
-        const char *path = youtube_download(video_id, worker_progress_callback);
+        const char *path = youtube_download(video_id, title, worker_progress_callback);
 
         // Update item status
         pthread_mutex_lock(&g_queue_mutex);

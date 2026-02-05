@@ -231,7 +231,7 @@ int youtube_search(const char *query, YouTubeResult *results, int max_results) {
     return count;
 }
 
-const char* youtube_download(const char *video_id, YouTubeProgressCallback progress_cb) {
+const char* youtube_download(const char *video_id, const char *title, YouTubeProgressCallback progress_cb) {
     if (!g_available || !video_id) {
         snprintf(g_error, sizeof(g_error), "Invalid parameters");
         return NULL;
@@ -242,15 +242,38 @@ const char* youtube_download(const char *video_id, YouTubeProgressCallback progr
     // Don't delete previous file - downloads are permanent now
     g_download_file[0] = '\0';
 
-    // Check if already downloaded (cache hit) - try common audio extensions
-    const char *cache_exts[] = {".webm", ".ogg", ".opus", ".m4a", NULL};
+    // Sanitize title for filename (fallback to video_id if no title)
+    char safe_filename[256];
+    if (title && title[0]) {
+        sanitize_filename(title, safe_filename, sizeof(safe_filename));
+    } else {
+        strncpy(safe_filename, video_id, sizeof(safe_filename) - 1);
+        safe_filename[sizeof(safe_filename) - 1] = '\0';
+    }
+
+    // Check if already downloaded (cache hit) - MP3 format only
+    // Try title-based filename first, then fall back to video_id (backwards compatibility)
+    const char *cache_exts[] = {".mp3", NULL};
     char cache_path[512];
+
+    // First try: title-based filename
+    for (int i = 0; cache_exts[i]; i++) {
+        snprintf(cache_path, sizeof(cache_path),
+                 "%s/%s%s", g_download_dir, safe_filename, cache_exts[i]);
+        if (access(cache_path, F_OK) == 0) {
+            strncpy(g_download_file, cache_path, sizeof(g_download_file) - 1);
+            printf("[YOUTUBE] Using cached file (title): %s\n", g_download_file);
+            return g_download_file;
+        }
+    }
+
+    // Fallback: video_id-based filename (backwards compatibility)
     for (int i = 0; cache_exts[i]; i++) {
         snprintf(cache_path, sizeof(cache_path),
                  "%s/%s%s", g_download_dir, video_id, cache_exts[i]);
         if (access(cache_path, F_OK) == 0) {
             strncpy(g_download_file, cache_path, sizeof(g_download_file) - 1);
-            printf("[YOUTUBE] Using cached file: %s\n", g_download_file);
+            printf("[YOUTUBE] Using cached file (id): %s\n", g_download_file);
             return g_download_file;
         }
     }
@@ -260,27 +283,28 @@ const char* youtube_download(const char *video_id, YouTubeProgressCallback progr
     }
 
     // Build yt-dlp download command
-    // -f: Select best audio format (no ffmpeg needed)
+    // -x: Extract audio from video
+    // --audio-format mp3: Convert to MP3 (requires ffmpeg)
+    // --ffmpeg-location: Tell yt-dlp where ffmpeg is (./bin/ relative to Mono.pak/)
     // --progress --newline: Machine-readable progress output
-    // -o: Output template with extension placeholder
-    // Note: We DON'T use -x (extract audio) because it requires ffmpeg
-    //       Instead we download the best audio-only format directly
+    // -o: Output template
     char cmd[1024];
     char output_template[512];
     snprintf(output_template, sizeof(output_template),
-             "%s/%s.%%(ext)s", g_download_dir, video_id);
+             "%s/%s.%%(ext)s", g_download_dir, safe_filename);
 
     snprintf(cmd, sizeof(cmd),
-        "%s -f 'bestaudio[ext=webm]/bestaudio[ext=ogg]/bestaudio' "
+        "%s -x --audio-format mp3 "
+        "--ffmpeg-location ./bin/ "
         "--no-playlist --progress --newline "
         "-o '%s' "
         "'https://www.youtube.com/watch?v=%s' "
         "2>&1",
         g_ytdlp_path, output_template, video_id);
 
-    // Update expected file path (will check multiple extensions after download)
+    // Update expected file path (MP3 output)
     snprintf(g_download_file, sizeof(g_download_file),
-             "%s/%s.webm", g_download_dir, video_id);
+             "%s/%s.mp3", g_download_dir, safe_filename);
 
     printf("[YOUTUBE] Downloading: %s\n", video_id);
     printf("[YOUTUBE] Command: %s\n", cmd);
@@ -339,17 +363,16 @@ const char* youtube_download(const char *video_id, YouTubeProgressCallback progr
 
     int status = pclose(pipe);
 
-    // Check if file was created (try multiple extensions)
-    // yt-dlp might output different formats depending on source
+    // Check if file was created (MP3 format)
     if (access(g_download_file, F_OK) != 0) {
-        // Try alternative extensions
-        const char *alt_exts[] = {".webm", ".ogg", ".opus", ".m4a", NULL};
+        // Try alternative extensions (fallback in case conversion fails)
+        const char *alt_exts[] = {".mp3", ".webm", ".m4a", NULL};
         char alt_path[512];
         bool found = false;
 
-        // Build base path without extension
+        // Build base path without extension (using sanitized title)
         char base_path[512];
-        snprintf(base_path, sizeof(base_path), "%s/%s", g_download_dir, video_id);
+        snprintf(base_path, sizeof(base_path), "%s/%s", g_download_dir, safe_filename);
 
         for (int i = 0; alt_exts[i]; i++) {
             snprintf(alt_path, sizeof(alt_path), "%s%s", base_path, alt_exts[i]);

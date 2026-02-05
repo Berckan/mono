@@ -17,12 +17,22 @@ typedef enum {
 } RepeatMode;
 
 /**
+ * Power modes for battery/performance trade-off
+ */
+typedef enum {
+    POWER_MODE_BATTERY,     // 20fps, minimal processing - best battery
+    POWER_MODE_BALANCED,    // 30fps (default) - good balance
+    POWER_MODE_PERFORMANCE  // 60fps, smoother UI - worst battery
+} PowerMode;
+
+/**
  * Menu items
  */
 typedef enum {
     MENU_SHUFFLE,
     MENU_REPEAT,
     MENU_SLEEP,
+    MENU_POWER,
     MENU_THEME,
     MENU_YOUTUBE,
     MENU_EXIT,
@@ -102,5 +112,20 @@ bool menu_youtube_selected(void);
  * Reset YouTube selection flag
  */
 void menu_reset_youtube(void);
+
+/**
+ * Get current power mode
+ */
+PowerMode menu_get_power_mode(void);
+
+/**
+ * Set power mode (for state restoration)
+ */
+void menu_set_power_mode(PowerMode mode);
+
+/**
+ * Get string representation of power mode
+ */
+const char* menu_get_power_string(void);
 
 #endif // MENU_H

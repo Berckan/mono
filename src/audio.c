@@ -39,6 +39,11 @@ static int g_flac_channels = 0;
 static int g_flac_duration = 0;
 static char g_current_path[512] = {0};  // For FLAC seek (reload from position)
 
+// FLAC chunked decoding - only decode N seconds at a time for fast seeking
+#define FLAC_CHUNK_SECONDS 60  // Decode 60 seconds at a time
+static int g_flac_chunk_start = 0;  // Start time of current chunk in seconds
+static int g_flac_chunk_end = 0;    // End time of current chunk in seconds
+
 /**
  * Check if file has FLAC extension
  */
@@ -49,16 +54,17 @@ static bool is_flac_file(const char *path) {
 }
 
 /**
- * Decode FLAC to WAV in memory using dr_flac, starting from a given position
+ * Decode FLAC to WAV in memory using dr_flac, decoding a chunk from start to end
  * @param path Path to FLAC file
  * @param start_sec Starting position in seconds (0 = beginning)
+ * @param end_sec Ending position in seconds (-1 = decode to end)
  * @param out_data Output: pointer to allocated WAV data (caller must free)
  * @param out_size Output: size of WAV data
  * @param out_sample_rate Output: sample rate of decoded audio
  * @param out_channels Output: number of channels
  * @return Total duration in seconds, or 0 on failure
  */
-static int decode_flac_to_wav(const char *path, int start_sec, uint8_t **out_data, size_t *out_size,
+static int decode_flac_to_wav(const char *path, int start_sec, int end_sec, uint8_t **out_data, size_t *out_size,
                                int *out_sample_rate, int *out_channels) {
     drflac *pFlac = drflac_open_file(path, NULL);
     if (!pFlac) {
@@ -79,11 +85,18 @@ static int decode_flac_to_wav(const char *path, int start_sec, uint8_t **out_dat
         if (!drflac_seek_to_pcm_frame(pFlac, start_frame)) {
             fprintf(stderr, "[AUDIO] FLAC seek failed, starting from beginning\n");
             start_frame = 0;
+            start_sec = 0;
             drflac_seek_to_pcm_frame(pFlac, 0);
         }
     }
 
-    uint64_t frames_to_decode = total_frames - start_frame;
+    // Calculate end frame (chunked decoding)
+    uint64_t end_frame = total_frames;
+    if (end_sec > 0 && end_sec < duration_sec) {
+        end_frame = (uint64_t)end_sec * sample_rate;
+    }
+
+    uint64_t frames_to_decode = end_frame - start_frame;
 
     // Allocate buffer for decoded PCM (16-bit samples)
     size_t pcm_size = frames_to_decode * channels * sizeof(int16_t);
@@ -149,7 +162,7 @@ static int decode_flac_to_wav(const char *path, int start_sec, uint8_t **out_dat
 }
 
 /**
- * Free FLAC WAV buffer
+ * Free FLAC WAV buffer and reset chunk tracking
  */
 static void free_flac_buffer(void) {
     if (g_flac_wav_data) {
@@ -160,20 +173,34 @@ static void free_flac_buffer(void) {
     g_flac_sample_rate = 0;
     g_flac_channels = 0;
     g_flac_duration = 0;
+    g_flac_chunk_start = 0;
+    g_flac_chunk_end = 0;
 }
 
 /**
- * Load FLAC file from a given position
+ * Load FLAC file from a given position (chunked decoding for fast seeking)
+ * Only decodes FLAC_CHUNK_SECONDS at a time for responsive UI
  */
 static bool load_flac_from_position(const char *path, int start_sec) {
-    // Decode FLAC to WAV starting from position
-    int duration = decode_flac_to_wav(path, start_sec, &g_flac_wav_data, &g_flac_wav_size,
+    // Calculate chunk boundaries
+    int chunk_start = start_sec;
+    int chunk_end = start_sec + FLAC_CHUNK_SECONDS;  // Decode only a chunk
+
+    // Decode FLAC chunk to WAV
+    int duration = decode_flac_to_wav(path, chunk_start, chunk_end, &g_flac_wav_data, &g_flac_wav_size,
                                        &g_flac_sample_rate, &g_flac_channels);
     if (duration <= 0 || !g_flac_wav_data) {
         return false;
     }
 
     g_flac_duration = duration;
+
+    // Track chunk boundaries for seek optimization
+    g_flac_chunk_start = chunk_start;
+    g_flac_chunk_end = (chunk_end < duration) ? chunk_end : duration;
+
+    printf("[AUDIO] FLAC chunk loaded: %d-%d sec (total %d sec)\n",
+           g_flac_chunk_start, g_flac_chunk_end, g_flac_duration);
 
     // Load WAV from memory
     SDL_RWops *rwops = SDL_RWFromMem(g_flac_wav_data, (int)g_flac_wav_size);
@@ -813,21 +840,56 @@ void audio_seek(int seconds) {
         new_pos = g_track_info.duration_sec - 1;
     }
 
-    // For FLAC (loaded as WAV), we need to reload from the new position
-    // because Mix_SetMusicPosition doesn't work with WAV
+    // For FLAC (loaded as WAV), we use chunked decoding for fast seeking
+    // Only reload if seeking outside the current chunk
     if (g_flac_wav_data != NULL && g_current_path[0] != '\0') {
-        bool was_playing = audio_is_playing();
-        int total_duration = g_flac_duration;  // Save before reload
+        int new_pos_int = (int)new_pos;
 
-        // Stop and free current
+        // Check if new position is within current chunk (with buffer for smooth playback)
+        // Allow seeking within chunk without reload
+        if (new_pos_int >= g_flac_chunk_start && new_pos_int < g_flac_chunk_end - 2) {
+            // Seek within current chunk - calculate position relative to chunk start
+            int pos_in_chunk = new_pos_int - g_flac_chunk_start;
+
+            // For WAV loaded from memory, we can't use Mix_SetMusicPosition
+            // So we need to reload even for in-chunk seeks, but it's still faster
+            // because we're reusing the already-decoded chunk boundaries
+            bool was_playing = audio_is_playing();
+            int total_duration = g_flac_duration;
+
+            Mix_HaltMusic();
+            Mix_FreeMusic(g_music);
+            g_music = NULL;
+            free_flac_buffer();
+
+            // Reload same chunk but start playback at new position
+            if (load_flac_from_position(g_current_path, g_flac_chunk_start)) {
+                g_flac_duration = total_duration;
+                g_track_info.duration_sec = total_duration;
+
+                if (was_playing) {
+                    Mix_PlayMusic(g_music, 1);
+                }
+
+                // Adjust timing to reflect actual position in track
+                g_music_position = new_pos;
+                g_start_time = SDL_GetTicks() - (Uint32)(pos_in_chunk * 1000);
+            }
+            return;
+        }
+
+        // Seeking outside current chunk - load new chunk centered on target position
+        bool was_playing = audio_is_playing();
+        int total_duration = g_flac_duration;
+
         Mix_HaltMusic();
         Mix_FreeMusic(g_music);
         g_music = NULL;
         free_flac_buffer();
 
-        // Reload from new position
-        if (load_flac_from_position(g_current_path, (int)new_pos)) {
-            g_flac_duration = total_duration;  // Restore total duration
+        // Load new chunk starting from target position
+        if (load_flac_from_position(g_current_path, new_pos_int)) {
+            g_flac_duration = total_duration;
             g_track_info.duration_sec = total_duration;
 
             if (was_playing) {
@@ -835,7 +897,7 @@ void audio_seek(int seconds) {
             }
 
             g_music_position = new_pos;
-            g_start_time = SDL_GetTicks() - (Uint32)(new_pos * 1000);
+            g_start_time = SDL_GetTicks();  // Reset timing since we're at chunk start
         }
         return;
     }
@@ -871,7 +933,41 @@ void audio_update(void) {
     if (!g_music || !Mix_PlayingMusic() || g_is_paused) return;
 
     Uint32 elapsed = SDL_GetTicks() - g_start_time;
-    g_music_position = elapsed / 1000.0;
+
+    // For chunked FLAC playback, position is relative to chunk start
+    if (g_flac_wav_data != NULL && g_flac_chunk_start > 0) {
+        // Calculate absolute position (chunk_start + elapsed within chunk)
+        double pos_in_chunk = elapsed / 1000.0;
+        g_music_position = g_flac_chunk_start + pos_in_chunk;
+
+        // Auto-extend chunk when approaching end (5 seconds before)
+        // This ensures seamless playback without gaps
+        int pos_int = (int)g_music_position;
+        if (pos_int >= g_flac_chunk_end - 5 && g_flac_chunk_end < g_flac_duration) {
+            printf("[AUDIO] Auto-extending FLAC chunk (at %d, chunk ends %d)\n",
+                   pos_int, g_flac_chunk_end);
+
+            // Load next chunk seamlessly
+            int total_duration = g_flac_duration;
+
+            Mix_HaltMusic();
+            Mix_FreeMusic(g_music);
+            g_music = NULL;
+            free_flac_buffer();
+
+            // Load chunk starting from current position
+            if (load_flac_from_position(g_current_path, pos_int)) {
+                g_flac_duration = total_duration;
+                g_track_info.duration_sec = total_duration;
+                Mix_PlayMusic(g_music, 1);
+                g_start_time = SDL_GetTicks();  // Reset for new chunk
+                g_music_position = pos_int;
+            }
+        }
+    } else {
+        g_music_position = elapsed / 1000.0;
+    }
+
     g_track_info.position_sec = (int)g_music_position;
 }
 

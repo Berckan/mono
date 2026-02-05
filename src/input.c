@@ -292,18 +292,19 @@ int input_get_seek_amount(void) {
     g_last_seek_tick = now;
 
     // Acceleration based on hold duration
+    // Optimized thresholds for faster response (was 1000/2000/3000ms)
     int seek_seconds;
-    if (held_ms < 1000) {
-        // 0-1 second: 5 seconds per tick
+    if (held_ms < 400) {
+        // 0-400ms: 5 seconds per tick (fine seeking)
         seek_seconds = 5;
-    } else if (held_ms < 2000) {
-        // 1-2 seconds: 15 seconds per tick
+    } else if (held_ms < 1000) {
+        // 400ms-1s: 15 seconds per tick
         seek_seconds = 15;
-    } else if (held_ms < 3000) {
-        // 2-3 seconds: 30 seconds per tick
+    } else if (held_ms < 2000) {
+        // 1-2 seconds: 30 seconds per tick
         seek_seconds = 30;
     } else {
-        // 3+ seconds: 60 seconds per tick (1 minute)
+        // 2+ seconds: 60 seconds per tick (1 minute)
         seek_seconds = 60;
     }
 

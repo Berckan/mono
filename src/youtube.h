@@ -55,10 +55,11 @@ int youtube_search(const char *query, YouTubeResult *results, int max_results);
 /**
  * Download audio from YouTube video
  * @param video_id YouTube video ID
+ * @param title Video title (used for filename, can be NULL for fallback to video_id)
  * @param progress_cb Optional progress callback (can be NULL)
  * @return Path to downloaded temp file, or NULL on error
  */
-const char* youtube_download(const char *video_id, YouTubeProgressCallback progress_cb);
+const char* youtube_download(const char *video_id, const char *title, YouTubeProgressCallback progress_cb);
 
 /**
  * Get the path to the last downloaded file
