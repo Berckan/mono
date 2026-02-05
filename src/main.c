@@ -917,8 +917,7 @@ static void render(AppState *state) {
             break;
         case STATE_FILE_MENU:
             if (filemenu_needs_confirm()) {
-                ui_render_file_menu();
-                ui_render_confirm_delete();
+                ui_render_confirm_delete();  // Standalone render, no file_menu needed
             } else {
                 ui_render_file_menu();
             }

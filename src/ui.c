@@ -1249,21 +1249,22 @@ void ui_render_file_menu(void) {
     // Controls hint (same position as help overlay)
     render_text_centered("A:Select  B:Cancel", box_y + box_h - 60, g_font_small, COLOR_DIM);
 
-    // Only present if confirm dialog won't follow
-    // (caller handles present when showing confirm overlay)
-    if (!filemenu_needs_confirm()) {
-        SDL_RenderPresent(g_renderer);
-    }
+    SDL_RenderPresent(g_renderer);
 }
 
 void ui_render_confirm_delete(void) {
-    // Darken overlay
+    // Clear screen completely (don't rely on previous render)
+    SDL_SetRenderDrawBlendMode(g_renderer, SDL_BLENDMODE_NONE);
+    SDL_SetRenderDrawColor(g_renderer, COLOR_BG.r, COLOR_BG.g, COLOR_BG.b, 255);
+    SDL_RenderClear(g_renderer);
+
+    // Dark background overlay
     SDL_SetRenderDrawBlendMode(g_renderer, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(g_renderer, 0, 0, 0, 220);
+    SDL_SetRenderDrawColor(g_renderer, 0, 0, 0, 180);
     SDL_Rect overlay = {0, 0, g_screen_width, g_screen_height};
     SDL_RenderFillRect(g_renderer, &overlay);
 
-    // Calculate dynamic box size (same style as help overlay)
+    // Calculate dynamic box size
     bool is_dir = filemenu_is_directory();
     int content_lines = is_dir ? 2 : 1;  // Filename + optional warning
 
@@ -1277,7 +1278,7 @@ void ui_render_confirm_delete(void) {
 
     draw_rect(box_x, box_y, box_w, box_h, COLOR_HIGHLIGHT);
 
-    // Warning title (with proper spacing)
+    // Warning title
     render_text_centered("Delete?", box_y + 30, g_font_large, COLOR_ERROR);
 
     // Filename
@@ -1295,6 +1296,8 @@ void ui_render_confirm_delete(void) {
     // Controls hint
     render_text_centered("A:Confirm  B:Cancel", box_y + box_h - 50, g_font_small, COLOR_DIM);
 
+    // Reset blend mode and present
+    SDL_SetRenderDrawBlendMode(g_renderer, SDL_BLENDMODE_NONE);
     SDL_RenderPresent(g_renderer);
 }
 
@@ -1614,11 +1617,17 @@ void ui_render_youtube_download(void) {
     // Header
     render_text("> YouTube", MARGIN, 8, g_font_medium, COLOR_TEXT);
 
-    // Title
-    render_text_centered("Downloading...", g_screen_height / 2 - 120, g_font_large, COLOR_ACCENT);
+    // Title "DOWNLOADING"
+    render_text_centered("DOWNLOADING", 80, g_font_large, COLOR_ACCENT);
 
-    // Track title
+    // Dancing monkey below title
+    int monkey_x = (g_screen_width - 16 * MONKEY_PIXEL_SIZE) / 2;
+    int monkey_y = 140;
+    render_monkey(monkey_x, monkey_y, true);  // true = dancing animation
+
+    // Track title (100px below monkey area)
     const char *title = ytsearch_get_download_title();
+    int title_y = monkey_y + 16 * MONKEY_PIXEL_SIZE + 40;  // After monkey + spacing
     if (title) {
         char title_display[64];
         if (strlen(title) > 40) {
@@ -1627,14 +1636,14 @@ void ui_render_youtube_download(void) {
             strncpy(title_display, title, sizeof(title_display) - 1);
             title_display[sizeof(title_display) - 1] = '\0';
         }
-        render_text_centered(title_display, g_screen_height / 2 - 60, g_font_medium, COLOR_TEXT);
+        render_text_centered(title_display, title_y, g_font_medium, COLOR_TEXT);
     }
 
     // Progress bar
     int bar_w = 500;
     int bar_h = 30;
     int bar_x = (g_screen_width - bar_w) / 2;
-    int bar_y = g_screen_height / 2;
+    int bar_y = title_y + 60;
 
     // Background
     draw_rect(bar_x, bar_y, bar_w, bar_h, COLOR_DIM);
@@ -1655,6 +1664,12 @@ void ui_render_youtube_download(void) {
     const char *status = ytsearch_get_download_status();
     if (status) {
         render_text_centered(status, bar_y + bar_h + 70, g_font_small, COLOR_DIM);
+    }
+
+    // Error message (if any) - shows exit code
+    const char *error = ytsearch_get_error();
+    if (error) {
+        render_text_centered(error, bar_y + bar_h + 110, g_font_small, COLOR_ERROR);
     }
 
     // Cancel hint
