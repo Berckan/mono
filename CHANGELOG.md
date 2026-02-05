@@ -1,5 +1,61 @@
 # Changelog
 
+## [2026.02.05] - v1.6.0
+
+### Added
+
+- Feat(Cover): Album cover art display in player view
+  WHY: Visual enhancement - shows cover.png/jpg, folder._, album._, front.\* from track directory.
+
+- Feat(Theme): Dark/Light theme system with toggle
+  WHY: User preference for different lighting conditions and battery optimization.
+
+- Feat(YouTube): YouTube Music integration via yt-dlp
+  WHY: Stream and download music directly from YouTube without leaving the app.
+
+- Feat(Search): On-screen keyboard for YouTube search queries
+  WHY: No physical keyboard on device - character picker UI enables text input.
+
+- Feat(Metadata): MusicBrainz API metadata scanner
+  WHY: Auto-populate missing ID3 tags by fingerprinting audio files.
+
+- Feat(Positions): Per-file position persistence
+  WHY: Resume playback exactly where you left off, even across different files.
+
+- Feat(FileMenu): File management context menu (X button)
+  WHY: Delete, rename files, and trigger metadata scans without leaving the app.
+
+- Feat(FLAC): Native FLAC decoding via dr_flac
+  WHY: Better FLAC support without SDL_mixer dependency issues.
+
+- Feat(SysInfo): System information display
+  WHY: Debug info and device stats for troubleshooting.
+
+### Changed
+
+- Refactor(UI): Implement 8-bit retro redesign with high contrast colors and blocky style
+  WHY: To provide a distinct visual style and improve readability on low-res screens.
+
+- Changed(UI): Disabled font anti-aliasing (TTF_HINTING_NONE)
+  WHY: Simulates pixel font look and feels more retro.
+
+- Changed(UI): Added thick borders to selection boxes and menus
+  WHY: Enhances the 8-bit aesthetic and improves visual hierarchy.
+
+### Technical
+
+- Added `cover.c/h` - Album cover loading with stb_image
+- Added `theme.c/h` - Theme management system
+- Added `youtube.c/h` - yt-dlp integration
+- Added `ytsearch.c/h` - YouTube search UI state
+- Added `metadata.c/h` - MusicBrainz API client
+- Added `positions.c/h` - Per-file position storage
+- Added `filemenu.c/h` - File context menu
+- Added `sysinfo.c/h` - System information
+- Added `cJSON.c/h` - JSON parsing library
+- Added `stb_image.h` - Image loading library
+- Added `dr_flac.h` - FLAC decoding library
+
 ## [2026.02.04] - v1.5.0
 
 ### Added

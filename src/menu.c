@@ -3,6 +3,8 @@
  */
 
 #include "menu.h"
+#include "theme.h"
+#include "youtube.h"
 #include <SDL2/SDL.h>
 #include <stdio.h>
 
@@ -12,6 +14,7 @@ static bool g_shuffle = false;
 static RepeatMode g_repeat = REPEAT_OFF;
 static int g_sleep_minutes = 0;  // 0, 15, 30, 60
 static Uint32 g_sleep_end_ticks = 0;
+static bool g_youtube_selected = false;
 
 // Sleep timer options (in minutes)
 static const int SLEEP_OPTIONS[] = {0, 15, 30, 60};
@@ -55,6 +58,20 @@ bool menu_select(void) {
                 g_sleep_end_ticks = 0;
                 printf("[MENU] Sleep timer: OFF\n");
             }
+            break;
+
+        case MENU_THEME:
+            theme_cycle();
+            break;
+
+        case MENU_YOUTUBE:
+            if (youtube_is_available()) {
+                g_youtube_selected = true;
+                printf("[MENU] YouTube selected\n");
+                return true;  // Close menu, signal to main.c
+            }
+            // YouTube not available, do nothing
+            printf("[MENU] YouTube unavailable\n");
             break;
 
         case MENU_EXIT:
@@ -128,4 +145,12 @@ void menu_set_shuffle(bool enabled) {
 void menu_set_repeat(RepeatMode mode) {
     g_repeat = mode;
     printf("[MENU] Repeat set to: %s\n", menu_get_repeat_string());
+}
+
+bool menu_youtube_selected(void) {
+    return g_youtube_selected;
+}
+
+void menu_reset_youtube(void) {
+    g_youtube_selected = false;
 }

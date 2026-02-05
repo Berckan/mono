@@ -11,6 +11,7 @@
  * File entry types
  */
 typedef enum {
+    ENTRY_PARENT,      // ".." to go up
     ENTRY_FILE,
     ENTRY_DIRECTORY
 } EntryType;

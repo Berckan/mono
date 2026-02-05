@@ -6,6 +6,8 @@
 #define AUDIO_H
 
 #include <stdbool.h>
+#include <stdint.h>
+#include <stddef.h>
 
 /**
  * Track metadata from ID3 tags or filename
@@ -96,5 +98,20 @@ void audio_update(void);
  * @return Pointer to track info (valid until next load)
  */
 const TrackInfo* audio_get_track_info(void);
+
+/**
+ * Get PCM data for waveform visualization (deprecated - always returns NULL)
+ * @param sample_count Output: number of samples per channel
+ * @param channels Output: number of channels
+ * @param sample_rate Output: sample rate in Hz
+ * @return Always NULL (waveform feature removed)
+ */
+const int16_t* audio_get_pcm_data(size_t *sample_count, int *channels, int *sample_rate);
+
+/**
+ * Check if PCM data is available (deprecated - always returns false)
+ * @return Always false (waveform feature removed)
+ */
+bool audio_has_pcm_data(void);
 
 #endif // AUDIO_H

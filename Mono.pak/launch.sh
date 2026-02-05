@@ -51,6 +51,22 @@ setup_power_profile
 
 export LD_LIBRARY_PATH="/usr/trimui/lib:$APP_DIR:$LD_LIBRARY_PATH"
 
-./mono.elf /mnt/SDCARD/Music 2>&1 | while IFS= read -r line; do
+# Audio routing - only use BT config if BT is actually connected
+# Otherwise it breaks audio initialization
+ASOUNDRC_SRC="/mnt/SDCARD/.userdata/tg5040/.asoundrc"
+ASOUNDRC_DST="/root/.asoundrc"
+# Check if bluetooth audio is active (bluealsa running with connected device)
+if pgrep -x bluealsa > /dev/null && [ -f "$ASOUNDRC_SRC" ]; then
+    if [ ! -f "$ASOUNDRC_DST" ] || [ "$ASOUNDRC_SRC" -nt "$ASOUNDRC_DST" ]; then
+        cp "$ASOUNDRC_SRC" "$ASOUNDRC_DST" 2>/dev/null
+        log "Using Bluetooth audio config"
+    fi
+else
+    # No BT connected - remove config to use default audio
+    rm -f "$ASOUNDRC_DST" 2>/dev/null
+    log "Using default audio output"
+fi
+
+./bin/mono /mnt/SDCARD/Music 2>&1 | while IFS= read -r line; do
     echo "[$(date '+%H:%M:%S')] $line" >> "$LOG_FILE"
 done

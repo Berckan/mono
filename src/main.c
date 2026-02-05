@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <dirent.h>
 #include <stdbool.h>
 #include <time.h>
@@ -26,6 +27,14 @@
 #include "state.h"
 #include "favorites.h"
 #include "screen.h"
+#include "sysinfo.h"
+#include "positions.h"
+#include "cover.h"
+#include "filemenu.h"
+#include "theme.h"
+#include "metadata.h"
+#include "youtube.h"
+#include "ytsearch.h"
 
 // Screen dimensions (auto-detected at runtime)
 static int g_screen_width = 1280;   // Fallback
@@ -34,15 +43,35 @@ static int g_screen_height = 720;   // Fallback
 // Application states
 typedef enum {
     STATE_BROWSER,
+    STATE_LOADING,      // Loading a file
     STATE_PLAYING,
     STATE_MENU,
     STATE_HELP_BROWSER,
-    STATE_HELP_PLAYER
+    STATE_HELP_PLAYER,
+    STATE_FILE_MENU,    // File options (delete, rename)
+    STATE_CONFIRM,      // Confirmation dialog
+    STATE_RENAME,       // Rename text input
+    STATE_SCANNING,     // Scanning metadata (MusicBrainz)
+    STATE_SCAN_COMPLETE,// Scan finished
+    STATE_YOUTUBE_SEARCH,   // YouTube search input
+    STATE_YOUTUBE_RESULTS,  // YouTube results list
+    STATE_YOUTUBE_DOWNLOAD, // YouTube download progress
+    STATE_ERROR         // Error loading file
 } AppState;
 
 // Global state
 static bool g_running = true;
 static AppState g_state = STATE_BROWSER;
+static char g_error_message[256] = {0};  // Last error message
+static char g_loading_file[256] = {0};   // File being loaded
+
+// Metadata scanning state
+static char g_scan_folder[512] = {0};
+static int g_scan_current = 0;
+static int g_scan_total = 0;
+static int g_scan_found = 0;
+static char g_scan_current_file[256] = {0};
+static bool g_scan_cancelled = false;
 
 // Currently playing track path (for state persistence)
 static char g_current_track_path[512] = {0};
@@ -100,9 +129,69 @@ static int init_sdl(void) {
 }
 
 /**
+ * Save current playback position for the current track
+ */
+static void save_current_position(void) {
+    if (g_current_track_path[0]) {
+        const TrackInfo *info = audio_get_track_info();
+        if (info && info->position_sec > 0) {
+            positions_set(g_current_track_path, info->position_sec);
+        }
+    }
+}
+
+/**
+ * Load and play a file, restoring saved position if available
+ * @param path Path to the audio file
+ * @return true if loaded successfully
+ */
+static bool play_file(const char *path) {
+    if (!path) return false;
+
+    // Save position of currently playing track before switching
+    save_current_position();
+
+    // Store filename for loading display
+    const char *filename = strrchr(path, '/');
+    filename = filename ? filename + 1 : path;
+    strncpy(g_loading_file, filename, sizeof(g_loading_file) - 1);
+
+    // Load new file
+    if (!audio_load(path)) {
+        // Store error message
+        snprintf(g_error_message, sizeof(g_error_message), "Cannot play: %s", filename);
+        return false;
+    }
+
+    // Update current track path
+    strncpy(g_current_track_path, path, sizeof(g_current_track_path) - 1);
+
+    // Load cover art from track's directory
+    const char *dir = browser_get_current_path();
+    if (dir) {
+        cover_load(dir);
+    }
+
+    // Check for saved position
+    int saved_pos = positions_get(path);
+    if (saved_pos > 0) {
+        audio_play();
+        audio_seek(saved_pos);
+        printf("[MAIN] Resumed %s at %d seconds\n", path, saved_pos);
+    } else {
+        audio_play();
+    }
+
+    return true;
+}
+
+/**
  * Save current application state before exit
  */
 static void save_app_state(void) {
+    // Save position of current track
+    save_current_position();
+
     AppStateData state_data = {0};
 
     // Copy current track path
@@ -127,6 +216,7 @@ static void save_app_state(void) {
     state_data.volume = audio_get_volume();
     state_data.shuffle = menu_is_shuffle_enabled();
     state_data.repeat = menu_get_repeat_mode();
+    state_data.theme = theme_get_current();
 
     // Was playing?
     state_data.was_playing = audio_is_playing() || audio_is_paused();
@@ -141,11 +231,15 @@ static void cleanup(void) {
     // Save state before cleanup
     save_app_state();
 
-    // Save favorites and restore screen
+    // Save favorites, positions, and restore screen
+    positions_cleanup();
     favorites_cleanup();
     state_cleanup();
     screen_cleanup();
+    sysinfo_cleanup();
 
+    metadata_cleanup();
+    youtube_cleanup();
     audio_cleanup();
     ui_cleanup();
     browser_cleanup();
@@ -162,8 +256,9 @@ static void cleanup(void) {
 /**
  * Handle input events based on current state
  */
-// Track previous state for returning from help
+// Track previous state for returning from help and menu
 static AppState g_prev_state = STATE_BROWSER;
+static AppState g_menu_return_state = STATE_BROWSER;  // Where to return after menu closes
 
 static void handle_input(AppState *state) {
     SDL_Event event;
@@ -180,6 +275,14 @@ static void handle_input(AppState *state) {
         }
     }
 
+    // Poll for seek (Left/Right D-pad held) - only in player state
+    if (*state == STATE_PLAYING && input_is_seeking()) {
+        int seek_amount = input_get_seek_amount();
+        if (seek_amount != 0) {
+            audio_seek(seek_amount);
+        }
+    }
+
     while (SDL_PollEvent(&event)) {
         if (event.type == SDL_QUIT) {
             g_running = false;
@@ -188,13 +291,109 @@ static void handle_input(AppState *state) {
 
         InputAction action = input_handle_event(&event);
 
-        // Help overlay dismissal (Y released)
+        // Global exit handler (Start + B combo)
+        if (action == INPUT_EXIT) {
+            g_running = false;
+            return;
+        }
+
+        // Help overlay dismissal (X or H to close, like menu)
         if (*state == STATE_HELP_BROWSER || *state == STATE_HELP_PLAYER) {
-            // Any button release returns to previous state
-            if (event.type == SDL_JOYBUTTONUP || event.type == SDL_KEYUP) {
+            // X/H or Back closes help (toggle behavior like menu)
+            if (action == INPUT_HELP || action == INPUT_BACK) {
                 *state = g_prev_state;
             }
             continue;  // Don't process other actions while in help
+        }
+
+        // Error state dismissal (any button press)
+        if (*state == STATE_ERROR) {
+            if (action != INPUT_NONE) {
+                *state = STATE_BROWSER;
+                g_error_message[0] = '\0';
+            }
+            continue;
+        }
+
+        // Loading state - no input handling, just wait
+        if (*state == STATE_LOADING) {
+            continue;
+        }
+
+        // File menu overlay handling (before main switch)
+        // Uses continue to prevent same button press from being processed twice
+        // (fixes turbo-toggle bug where confirm dialog opens and closes immediately)
+        if (*state == STATE_FILE_MENU) {
+            if (filemenu_needs_confirm()) {
+                // In confirm dialog - only A/B work
+                if (action == INPUT_SELECT) {
+                    FileMenuResult result = filemenu_confirm_delete(true);
+                    if (result == FILEMENU_RESULT_DELETED) {
+                        browser_navigate_to(browser_get_current_path());
+                    }
+                    *state = STATE_BROWSER;
+                } else if (action == INPUT_BACK) {
+                    filemenu_confirm_delete(false);
+                    // Stay in file menu (g_confirm_pending is now false)
+                }
+                // Ignore other actions in confirm dialog
+            } else {
+                // In file menu - handle navigation
+                switch (action) {
+                    case INPUT_UP:
+                        filemenu_move_cursor(-1);
+                        break;
+                    case INPUT_DOWN:
+                        filemenu_move_cursor(1);
+                        break;
+                    case INPUT_SELECT:
+                        if (filemenu_select()) {
+                            int option = filemenu_get_actual_option();
+                            if (option == FILEMENU_RENAME) {
+                                filemenu_rename_init();
+                                *state = STATE_RENAME;
+                            } else if (option == FILEMENU_SCAN_METADATA) {
+                                // Initialize metadata scan
+                                strncpy(g_scan_folder, filemenu_get_path(), sizeof(g_scan_folder) - 1);
+                                g_scan_current = 0;
+                                g_scan_found = 0;
+                                g_scan_cancelled = false;
+                                g_scan_current_file[0] = '\0';
+
+                                // Count audio files in folder
+                                g_scan_total = 0;
+                                DIR *dir = opendir(g_scan_folder);
+                                if (dir) {
+                                    struct dirent *entry;
+                                    while ((entry = readdir(dir)) != NULL) {
+                                        if (entry->d_name[0] == '.') continue;
+                                        const char *ext = strrchr(entry->d_name, '.');
+                                        if (ext && (strcasecmp(ext, ".mp3") == 0 ||
+                                                    strcasecmp(ext, ".flac") == 0 ||
+                                                    strcasecmp(ext, ".ogg") == 0 ||
+                                                    strcasecmp(ext, ".wav") == 0)) {
+                                            g_scan_total++;
+                                        }
+                                    }
+                                    closedir(dir);
+                                }
+
+                                *state = STATE_SCANNING;
+                            } else if (option == FILEMENU_CANCEL) {
+                                *state = STATE_BROWSER;
+                            }
+                        }
+                        // If filemenu_select() returned false, confirm is now pending
+                        // Next frame will enter the confirm dialog branch above
+                        break;
+                    case INPUT_BACK:
+                        *state = STATE_BROWSER;
+                        break;
+                    default:
+                        break;
+                }
+            }
+            continue;  // CRITICAL: Prevent same event from being processed twice
         }
 
         switch (*state) {
@@ -208,21 +407,19 @@ static void handle_input(AppState *state) {
                         break;
                     case INPUT_SELECT:
                         if (browser_select_current()) {
-                            // File selected, start playing
+                            // File selected, start playing (with position restore)
                             const char *path = browser_get_selected_path();
-                            if (path && audio_load(path)) {
-                                // Store current track path for state persistence
-                                strncpy(g_current_track_path, path, sizeof(g_current_track_path) - 1);
-                                audio_play();
+                            if (play_file(path)) {
                                 *state = STATE_PLAYING;
+                            } else {
+                                // Show error state (will auto-return to browser)
+                                *state = STATE_ERROR;
                             }
                         }
                         break;
                     case INPUT_BACK:
-                        if (!browser_go_up()) {
-                            // At root, exit application
-                            g_running = false;
-                        }
+                        // Just navigate up, don't exit (use Start+B to exit)
+                        browser_go_up();
                         break;
                     case INPUT_FAVORITE: {
                         // Toggle favorite for selected file
@@ -245,6 +442,20 @@ static void handle_input(AppState *state) {
                         g_prev_state = STATE_BROWSER;
                         *state = STATE_HELP_BROWSER;
                         break;
+                    case INPUT_SHUFFLE: {
+                        // Open file menu for selected item (not parent "..")
+                        const FileEntry *entry = browser_get_entry(browser_get_cursor());
+                        if (entry && entry->type != ENTRY_PARENT) {
+                            filemenu_init(entry->full_path, entry->type == ENTRY_DIRECTORY);
+                            *state = STATE_FILE_MENU;
+                        }
+                        break;
+                    }
+                    case INPUT_MENU:
+                        // Open options menu from browser
+                        g_menu_return_state = STATE_BROWSER;
+                        *state = STATE_MENU;
+                        break;
                     default:
                         break;
                 }
@@ -266,42 +477,33 @@ static void handle_input(AppState *state) {
                         screen_toggle_dim();
                         break;
                     case INPUT_BACK:
+                        // Save position before going back to browser
+                        save_current_position();
                         audio_stop();
                         g_current_track_path[0] = '\0';  // Clear current track
                         *state = STATE_BROWSER;
                         break;
-                    case INPUT_LEFT:
-                        audio_seek(-10);  // Seek back 10 seconds
-                        break;
-                    case INPUT_RIGHT:
-                        audio_seek(10);   // Seek forward 10 seconds
-                        break;
+                    // INPUT_LEFT/INPUT_RIGHT: handled by hold-to-seek with acceleration
                     case INPUT_UP:
-                        // D-Pad UP = volume up (hardware vol keys captured by system)
                         audio_set_volume(audio_get_volume() + 5);
+                        sysinfo_refresh_volume();
                         break;
                     case INPUT_DOWN:
-                        // D-Pad DOWN = volume down
                         audio_set_volume(audio_get_volume() - 5);
+                        sysinfo_refresh_volume();
                         break;
                     case INPUT_PREV:
-                        // Play previous track
+                        // Play previous track (with position save/restore)
                         if (browser_move_cursor(-1)) {
                             const char *path = browser_get_selected_path();
-                            if (path && audio_load(path)) {
-                                strncpy(g_current_track_path, path, sizeof(g_current_track_path) - 1);
-                                audio_play();
-                            }
+                            play_file(path);
                         }
                         break;
                     case INPUT_NEXT:
-                        // Play next track
+                        // Play next track (with position save/restore)
                         if (browser_move_cursor(1)) {
                             const char *path = browser_get_selected_path();
-                            if (path && audio_load(path)) {
-                                strncpy(g_current_track_path, path, sizeof(g_current_track_path) - 1);
-                                audio_play();
-                            }
+                            play_file(path);
                         }
                         break;
                     case INPUT_FAVORITE:
@@ -313,6 +515,7 @@ static void handle_input(AppState *state) {
                         }
                         break;
                     case INPUT_MENU:
+                        g_menu_return_state = STATE_PLAYING;
                         *state = STATE_MENU;
                         break;
                     case INPUT_VOL_UP:
@@ -340,14 +543,24 @@ static void handle_input(AppState *state) {
                         break;
                     case INPUT_SELECT:
                         if (menu_select()) {
-                            // Exit selected - stop playback and return to browser
-                            audio_stop();
-                            *state = STATE_BROWSER;
+                            // Check if YouTube was selected
+                            if (menu_youtube_selected()) {
+                                menu_reset_youtube();
+                                // Initialize YouTube search and switch state
+                                ytsearch_init();
+                                *state = STATE_YOUTUBE_SEARCH;
+                            } else {
+                                // Exit selected - stop playback (if playing) and return to browser
+                                if (g_menu_return_state == STATE_PLAYING) {
+                                    audio_stop();
+                                }
+                                *state = STATE_BROWSER;
+                            }
                         }
                         break;
                     case INPUT_BACK:
-                        // Only X closes menu (Start was causing rapid open/close)
-                        *state = STATE_PLAYING;
+                        // Return to previous state (browser or player)
+                        *state = g_menu_return_state;
                         break;
                     case INPUT_VOL_UP:
                         audio_set_volume(audio_get_volume() + 5);
@@ -364,6 +577,137 @@ static void handle_input(AppState *state) {
             case STATE_HELP_PLAYER:
                 // Handled above with continue statement
                 break;
+
+            case STATE_FILE_MENU:
+                // Handled above with continue statement (early-exit pattern)
+                break;
+
+            case STATE_RENAME:
+                switch (action) {
+                    case INPUT_UP:
+                        filemenu_rename_move_kbd(0, -1);  // Grid: up
+                        break;
+                    case INPUT_DOWN:
+                        filemenu_rename_move_kbd(0, 1);   // Grid: down
+                        break;
+                    case INPUT_LEFT:
+                        filemenu_rename_move_kbd(-1, 0);  // Grid: left
+                        break;
+                    case INPUT_RIGHT:
+                        filemenu_rename_move_kbd(1, 0);   // Grid: right
+                        break;
+                    case INPUT_SELECT:
+                        filemenu_rename_insert();
+                        break;
+                    case INPUT_FAVORITE:
+                        filemenu_rename_delete();
+                        break;
+                    case INPUT_MENU: {
+                        // Start = confirm rename
+                        FileMenuResult result = filemenu_rename_confirm();
+                        if (result == FILEMENU_RESULT_RENAMED) {
+                            browser_navigate_to(browser_get_current_path());
+                        }
+                        *state = STATE_BROWSER;
+                        break;
+                    }
+                    case INPUT_BACK:
+                        *state = STATE_BROWSER;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+
+            case STATE_CONFIRM:
+                // Handled within STATE_FILE_MENU
+                break;
+
+            case STATE_SCANNING:
+                // B to cancel scanning
+                if (action == INPUT_BACK) {
+                    g_scan_cancelled = true;
+                    *state = STATE_SCAN_COMPLETE;
+                }
+                break;
+
+            case STATE_SCAN_COMPLETE:
+                // Any button returns to browser
+                if (action == INPUT_SELECT || action == INPUT_BACK) {
+                    *state = STATE_BROWSER;
+                }
+                break;
+
+            case STATE_YOUTUBE_SEARCH:
+                switch (action) {
+                    case INPUT_UP:
+                        ytsearch_move_kbd(0, -1);   // Grid: up
+                        break;
+                    case INPUT_DOWN:
+                        ytsearch_move_kbd(0, 1);    // Grid: down
+                        break;
+                    case INPUT_LEFT:
+                        ytsearch_move_kbd(-1, 0);   // Grid: left
+                        break;
+                    case INPUT_RIGHT:
+                        ytsearch_move_kbd(1, 0);    // Grid: right
+                        break;
+                    case INPUT_SELECT:
+                        ytsearch_insert();
+                        break;
+                    case INPUT_FAVORITE:
+                        ytsearch_delete();
+                        break;
+                    case INPUT_MENU:
+                        // Start = execute search
+                        if (ytsearch_execute_search()) {
+                            // State will change to SEARCHING in update()
+                        }
+                        break;
+                    case INPUT_BACK:
+                        *state = STATE_BROWSER;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+
+            case STATE_YOUTUBE_RESULTS:
+                switch (action) {
+                    case INPUT_UP:
+                        ytsearch_move_results_cursor(-1);
+                        break;
+                    case INPUT_DOWN:
+                        ytsearch_move_results_cursor(1);
+                        break;
+                    case INPUT_SELECT:
+                        // Start download of selected result
+                        if (ytsearch_start_download()) {
+                            *state = STATE_YOUTUBE_DOWNLOAD;
+                        }
+                        break;
+                    case INPUT_BACK:
+                        // Go back to search input
+                        ytsearch_set_state(YTSEARCH_INPUT);
+                        *state = STATE_YOUTUBE_SEARCH;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+
+            case STATE_YOUTUBE_DOWNLOAD:
+                // Only B to cancel
+                if (action == INPUT_BACK) {
+                    ytsearch_cancel_download();
+                    *state = STATE_YOUTUBE_RESULTS;
+                }
+                break;
+
+            case STATE_LOADING:
+            case STATE_ERROR:
+                // Handled above with continue statement
+                break;
         }
     }
 }
@@ -371,30 +715,55 @@ static void handle_input(AppState *state) {
 /**
  * Update game state
  */
+static Uint32 g_last_position_save = 0;
+static int g_last_saved_position = -1;  // Track last saved value to avoid redundant writes
+#define POSITION_SAVE_INTERVAL_MS 15000  // Save position every 15 seconds (was 10)
+
 static void update(AppState *state) {
     // Check sleep timer
     if (*state == STATE_PLAYING || *state == STATE_MENU) {
         if (menu_update_sleep_timer()) {
-            // Sleep timer expired - stop playback and return to browser
+            // Sleep timer expired - save position and return to browser
+            save_current_position();
             audio_stop();
             *state = STATE_BROWSER;
             return;
         }
     }
 
+    // Periodically save position while playing (only if position changed significantly)
+    if (*state == STATE_PLAYING && audio_is_playing()) {
+        Uint32 now = SDL_GetTicks();
+        if (now - g_last_position_save >= POSITION_SAVE_INTERVAL_MS) {
+            const TrackInfo *info = audio_get_track_info();
+            // Only save if position changed by at least 5 seconds
+            if (info && (g_last_saved_position < 0 ||
+                         abs(info->position_sec - g_last_saved_position) >= 5)) {
+                save_current_position();
+                g_last_saved_position = info->position_sec;
+            }
+            g_last_position_save = now;
+        }
+    }
+
     // Check if current track finished (not just paused)
     if (*state == STATE_PLAYING && !audio_is_playing() && !audio_is_paused()) {
+        // Track finished completely - clear its saved position
+        if (g_current_track_path[0]) {
+            positions_clear(g_current_track_path);
+        }
+
         RepeatMode repeat = menu_get_repeat_mode();
 
         if (repeat == REPEAT_ONE) {
-            // Repeat current track
+            // Repeat current track from beginning
             const char *path = browser_get_selected_path();
             if (path && audio_load(path)) {
                 strncpy(g_current_track_path, path, sizeof(g_current_track_path) - 1);
                 audio_play();
             }
         } else if (menu_is_shuffle_enabled()) {
-            // Shuffle: play random track
+            // Shuffle: play random track from beginning
             int count = browser_get_count();
             if (count > 0) {
                 int random_offset = rand() % count;
@@ -406,7 +775,7 @@ static void update(AppState *state) {
                 }
             }
         } else {
-            // Normal: advance to next track
+            // Normal: advance to next track from beginning
             if (browser_move_cursor(1)) {
                 const char *path = browser_get_selected_path();
                 if (path && audio_load(path)) {
@@ -429,6 +798,82 @@ static void update(AppState *state) {
         }
     }
 
+    // Handle metadata scanning (incremental - one file per frame)
+    if (*state == STATE_SCANNING) {
+        // Get next file to scan
+        DIR *dir = opendir(g_scan_folder);
+        if (dir) {
+            struct dirent *entry;
+            int count = 0;
+            bool found_file = false;
+
+            while ((entry = readdir(dir)) != NULL) {
+                if (entry->d_name[0] == '.') continue;
+
+                // Check if audio file
+                const char *ext = strrchr(entry->d_name, '.');
+                if (!ext) continue;
+                if (strcasecmp(ext, ".mp3") != 0 && strcasecmp(ext, ".flac") != 0 &&
+                    strcasecmp(ext, ".ogg") != 0 && strcasecmp(ext, ".wav") != 0) continue;
+
+                count++;
+                if (count <= g_scan_current) continue;  // Skip already processed
+
+                // Found next file to process
+                found_file = true;
+                g_scan_current = count;
+                strncpy(g_scan_current_file, entry->d_name, sizeof(g_scan_current_file) - 1);
+
+                // Build full path
+                char filepath[512];
+                snprintf(filepath, sizeof(filepath), "%s/%s", g_scan_folder, entry->d_name);
+
+                // Lookup metadata
+                MetadataResult result;
+                if (metadata_lookup(filepath, &result)) {
+                    g_scan_found++;
+                }
+                break;
+            }
+            closedir(dir);
+
+            // Check if scan complete
+            if (!found_file || g_scan_current >= g_scan_total) {
+                *state = STATE_SCAN_COMPLETE;
+            }
+        } else {
+            *state = STATE_SCAN_COMPLETE;
+        }
+    }
+
+    // Handle YouTube search (async-like, one frame to complete)
+    if (*state == STATE_YOUTUBE_SEARCH && ytsearch_get_state() == YTSEARCH_SEARCHING) {
+        if (ytsearch_update_search()) {
+            // Search complete
+            if (ytsearch_get_state() == YTSEARCH_RESULTS) {
+                *state = STATE_YOUTUBE_RESULTS;
+            }
+            // On error, stays in YOUTUBE_SEARCH (error shown)
+        }
+    }
+
+    // Handle YouTube download
+    if (*state == STATE_YOUTUBE_DOWNLOAD) {
+        const char *downloaded = ytsearch_update_download();
+        if (downloaded) {
+            // Download complete - play the file
+            if (play_file(downloaded)) {
+                *state = STATE_PLAYING;
+            } else {
+                // Error playing
+                *state = STATE_YOUTUBE_RESULTS;
+            }
+        } else if (ytsearch_get_state() != YTSEARCH_DOWNLOADING) {
+            // Download cancelled or failed
+            *state = STATE_YOUTUBE_RESULTS;
+        }
+    }
+
     // Update audio position (for progress bar)
     audio_update();
 }
@@ -441,6 +886,9 @@ static void render(AppState *state) {
         case STATE_BROWSER:
             ui_render_browser();
             break;
+        case STATE_LOADING:
+            ui_render_loading(g_loading_file);
+            break;
         case STATE_PLAYING:
             ui_render_player();
             break;
@@ -452,6 +900,38 @@ static void render(AppState *state) {
             break;
         case STATE_HELP_PLAYER:
             ui_render_help_player();
+            break;
+        case STATE_FILE_MENU:
+            if (filemenu_needs_confirm()) {
+                ui_render_file_menu();
+                ui_render_confirm_delete();
+            } else {
+                ui_render_file_menu();
+            }
+            break;
+        case STATE_RENAME:
+            ui_render_rename();
+            break;
+        case STATE_CONFIRM:
+            // Handled within STATE_FILE_MENU
+            break;
+        case STATE_SCANNING:
+            ui_render_scanning(g_scan_current, g_scan_total, g_scan_current_file, g_scan_found);
+            break;
+        case STATE_SCAN_COMPLETE:
+            ui_render_scan_complete(g_scan_found, g_scan_total);
+            break;
+        case STATE_YOUTUBE_SEARCH:
+            ui_render_youtube_search();
+            break;
+        case STATE_YOUTUBE_RESULTS:
+            ui_render_youtube_results();
+            break;
+        case STATE_YOUTUBE_DOWNLOAD:
+            ui_render_youtube_download();
+            break;
+        case STATE_ERROR:
+            ui_render_error(g_error_message);
             break;
     }
 }
@@ -471,7 +951,13 @@ int main(int argc, char *argv[]) {
     }
 
     // Initialize UI
-    // Auto-detect screen dimensions
+#ifdef __APPLE__
+    // macOS: use fixed Trimui Brick resolution for windowed preview
+    g_screen_width = 1280;
+    g_screen_height = 720;
+    printf("[MAIN] macOS preview mode: %dx%d\n", g_screen_width, g_screen_height);
+#else
+    // Embedded device: auto-detect screen dimensions
     SDL_DisplayMode mode;
     if (SDL_GetCurrentDisplayMode(0, &mode) == 0) {
         g_screen_width = mode.w;
@@ -480,6 +966,7 @@ int main(int argc, char *argv[]) {
     } else {
         printf("[MAIN] Using fallback display: %dx%d\n", g_screen_width, g_screen_height);
     }
+#endif
 
     if (ui_init(g_screen_width, g_screen_height) < 0) {
         fprintf(stderr, "UI initialization failed\n");
@@ -493,6 +980,12 @@ int main(int argc, char *argv[]) {
         cleanup();
         return 1;
     }
+
+    // Initialize metadata cache (MusicBrainz lookups)
+    metadata_init();
+
+    // Initialize YouTube integration
+    youtube_init();
 
     // Initialize file browser
     // Default music path - can be overridden via command line
@@ -510,6 +1003,9 @@ int main(int argc, char *argv[]) {
     // Initialize menu system
     menu_init();
 
+    // Initialize theme system
+    theme_init();
+
     // Initialize state persistence
     if (state_init() < 0) {
         fprintf(stderr, "State initialization failed (non-fatal)\n");
@@ -520,9 +1016,19 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Favorites initialization failed (non-fatal)\n");
     }
 
+    // Initialize position tracking
+    if (positions_init() < 0) {
+        fprintf(stderr, "Positions initialization failed (non-fatal)\n");
+    }
+
     // Initialize screen brightness control
     if (screen_init() < 0) {
         fprintf(stderr, "Screen control initialization failed (non-fatal)\n");
+    }
+
+    // Initialize system info (battery, volume)
+    if (sysinfo_init() < 0) {
+        fprintf(stderr, "System info initialization failed (non-fatal)\n");
     }
 
     // Try to restore previous state
@@ -532,6 +1038,7 @@ int main(int argc, char *argv[]) {
         audio_set_volume(saved_state.volume);
         menu_set_shuffle(saved_state.shuffle);
         menu_set_repeat(saved_state.repeat);
+        theme_set(saved_state.theme);
 
         // Try to resume playback if there was an active track
         if (saved_state.has_resume_data && saved_state.last_file[0]) {
@@ -553,19 +1060,8 @@ int main(int argc, char *argv[]) {
             // Auto-resume if was playing
             if (saved_state.was_playing) {
                 const char *path = browser_get_selected_path();
-                if (path && audio_load(path)) {
-                    strncpy(g_current_track_path, path, sizeof(g_current_track_path) - 1);
-
-                    // Seek to saved position
-                    if (saved_state.last_position > 0) {
-                        audio_play();
-                        audio_seek(saved_state.last_position);
-                    } else {
-                        audio_play();
-                    }
+                if (play_file(path)) {
                     g_state = STATE_PLAYING;
-                    printf("[MAIN] Resumed playback: %s @ %ds\n",
-                           path, saved_state.last_position);
                 }
             }
         }
@@ -576,14 +1072,42 @@ int main(int argc, char *argv[]) {
 
     printf("Mono - Initialized successfully\n");
 
-    // Main loop
+    // Adaptive frame rate for energy efficiency:
+    // - 60fps when playing (progress bar, monkey animation)
+    // - 30fps in browser/menu (responsive but power efficient)
+    // - 10fps when screen dimmed (minimal updates)
+    Uint32 frame_start;
+    AppState prev_state = g_state;
+
     while (g_running) {
+        frame_start = SDL_GetTicks();
+
+        // Determine target frame time based on current activity
+        Uint32 target_frame_ms;
+        if (screen_is_dimmed()) {
+            target_frame_ms = 100;  // 10fps - screen dimmed, minimal updates
+        } else if (g_state == STATE_PLAYING && audio_is_playing()) {
+            target_frame_ms = 16;   // 60fps - need smooth progress bar & animation
+        } else if (g_state == STATE_PLAYING && audio_is_paused()) {
+            target_frame_ms = 50;   // 20fps - paused, less urgent
+        } else {
+            target_frame_ms = 33;   // 30fps - browser/menu, balanced
+        }
+
         handle_input(&g_state);
         update(&g_state);
         render(&g_state);
 
-        // Cap at ~60fps
-        SDL_Delay(16);
+        // Track state changes for debugging
+        if (g_state != prev_state) {
+            prev_state = g_state;
+        }
+
+        // Energy-efficient sleep - use longer delay when less activity needed
+        Uint32 frame_duration = SDL_GetTicks() - frame_start;
+        if (frame_duration < target_frame_ms) {
+            SDL_Delay(target_frame_ms - frame_duration);
+        }
     }
 
     printf("Mono - Shutting down...\n");

@@ -217,6 +217,7 @@ bool state_save(const AppStateData *data) {
     fprintf(f, "  \"volume\": %d,\n", data->volume);
     fprintf(f, "  \"shuffle\": %s,\n", data->shuffle ? "true" : "false");
     fprintf(f, "  \"repeat\": %d,\n", (int)data->repeat);
+    fprintf(f, "  \"theme\": %d,\n", (int)data->theme);
     fprintf(f, "  \"was_playing\": %s\n", data->was_playing ? "true" : "false");
     fprintf(f, "}\n");
 
@@ -233,6 +234,7 @@ bool state_load(AppStateData *data) {
     data->volume = 80;
     data->shuffle = false;
     data->repeat = REPEAT_OFF;
+    data->theme = THEME_DARK;
     data->has_resume_data = false;
 
     FILE *f = fopen(g_state_path, "r");
@@ -277,6 +279,11 @@ bool state_load(AppStateData *data) {
     int repeat_int = 0;
     if (json_get_int(json, "repeat", &repeat_int)) {
         data->repeat = (RepeatMode)repeat_int;
+    }
+
+    int theme_int = 0;
+    if (json_get_int(json, "theme", &theme_int)) {
+        data->theme = (ThemeId)theme_int;
     }
 
     json_get_bool(json, "was_playing", &data->was_playing);

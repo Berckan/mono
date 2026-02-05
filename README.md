@@ -1,16 +1,39 @@
 # Mono
 
+<!-- TODO: Add monito isotipo here -->
+
 Minimalist MP3 player for **Trimui Brick** running NextUI/MinUI custom firmware.
 
 ![Mono Screenshot](docs/screenshot.png)
 
 ## Features
 
+### Core Playback
+
 - **Browse** `/Music/` folder on SD card
 - **Play** MP3, FLAC, OGG, and WAV files
-- **Display** ID3 metadata (title, artist)
-- **Controls** via D-Pad and buttons
-- **Dark theme** optimized for battery life
+- **Display** ID3 metadata (title, artist, album)
+- **Cover Art** - Shows album covers from folder
+- **Resume** - Remembers position per file
+
+### YouTube Integration
+
+- **Search** YouTube Music with on-screen keyboard
+- **Download** tracks via yt-dlp
+- **Stream** directly without leaving the app
+
+### File Management
+
+- **Rename** files with on-screen keyboard
+- **Delete** files with confirmation
+- **Scan** folders for metadata via MusicBrainz
+
+### Customization
+
+- **Themes** - Dark/Light mode toggle
+- **8-bit UI** - Retro high-contrast design
+- **Shuffle/Repeat** - Playback modes
+- **Sleep Timer** - Auto-stop after 15/30/60 min
 
 ## Build
 
@@ -40,11 +63,14 @@ Copy `Mono.pak/` to `/Tools/tg5040/` on your SD card.
 
 ### Browser Mode
 
-| Button   | Action         |
-| -------- | -------------- |
-| D-Pad ↑↓ | Navigate files |
-| A        | Select / Enter |
-| B        | Back / Exit    |
+| Button   | Action                    |
+| -------- | ------------------------- |
+| D-Pad ↑↓ | Navigate files            |
+| A        | Select / Enter            |
+| B        | Back / Exit               |
+| X        | File menu (rename/delete) |
+| Y        | Toggle favorite           |
+| Start    | YouTube search            |
 
 ### Player Mode
 
@@ -54,23 +80,34 @@ Copy `Mono.pak/` to `/Tools/tg5040/` on your SD card.
 | D-Pad ←→ | Seek ±10s         |
 | A        | Play / Pause      |
 | B        | Back to browser   |
+| X        | Cycle theme       |
+| Y        | Toggle favorite   |
 | L/R      | Prev / Next track |
-| Start    | Menu              |
+| Start    | Options menu      |
+| Select   | Dim screen        |
 
 ## Project Structure
 
 ```
 mono/
 ├── src/
-│   ├── main.c      # Entry point
-│   ├── audio.c     # SDL_mixer playback
-│   ├── browser.c   # File navigation
-│   ├── ui.c        # SDL2 rendering
-│   └── input.c     # Button handling
-├── Mono.pak/       # Packaged app
-│   ├── launch.sh   # Entry script
-│   ├── bin/        # Compiled binary
-│   └── assets/     # Fonts, icons
+│   ├── main.c        # Entry point, app loop
+│   ├── audio.c       # SDL_mixer playback
+│   ├── browser.c     # File navigation
+│   ├── ui.c          # SDL2 rendering
+│   ├── input.c       # Button handling
+│   ├── cover.c       # Album art loading
+│   ├── theme.c       # Dark/Light themes
+│   ├── youtube.c     # yt-dlp integration
+│   ├── ytsearch.c    # YouTube search UI
+│   ├── metadata.c    # MusicBrainz API
+│   ├── positions.c   # Position persistence
+│   ├── filemenu.c    # File context menu
+│   └── state.c       # App state persistence
+├── Mono.pak/         # Packaged app
+│   ├── launch.sh     # Entry script
+│   ├── bin/          # Compiled binary
+│   └── pak.json      # NextUI metadata
 ├── Makefile
 └── README.md
 ```
@@ -80,6 +117,8 @@ mono/
 - SDL2
 - SDL2_mixer (MP3/FLAC/OGG support)
 - SDL2_ttf (font rendering)
+- yt-dlp (optional, for YouTube)
+- curl (optional, for MusicBrainz)
 
 ## License
 
@@ -89,4 +128,3 @@ MIT License - Berckan Guerrero
 
 - [Trimui Brick](https://trimui.com)
 - [NextUI Firmware](https://github.com/frfrwx/NextUI)
-- [SDLReader-brick](https://github.com/Helaas/SDLReader-brick) (reference)

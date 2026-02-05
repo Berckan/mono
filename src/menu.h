@@ -23,6 +23,8 @@ typedef enum {
     MENU_SHUFFLE,
     MENU_REPEAT,
     MENU_SLEEP,
+    MENU_THEME,
+    MENU_YOUTUBE,
     MENU_EXIT,
     MENU_ITEM_COUNT
 } MenuItem;
@@ -89,5 +91,16 @@ void menu_set_shuffle(bool enabled);
  * Set repeat mode (for state restoration)
  */
 void menu_set_repeat(RepeatMode mode);
+
+/**
+ * Check if YouTube was selected
+ * @return true if MENU_YOUTUBE was last selected
+ */
+bool menu_youtube_selected(void);
+
+/**
+ * Reset YouTube selection flag
+ */
+void menu_reset_youtube(void);
 
 #endif // MENU_H

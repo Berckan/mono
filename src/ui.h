@@ -43,4 +43,62 @@ void ui_render_help_browser(void);
  */
 void ui_render_help_player(void);
 
+/**
+ * Render loading screen
+ * @param filename Name of file being loaded
+ */
+void ui_render_loading(const char *filename);
+
+/**
+ * Render error screen
+ * @param message Error message to display
+ */
+void ui_render_error(const char *message);
+
+/**
+ * Render metadata scanning progress
+ * @param current Current file number
+ * @param total Total file count
+ * @param current_file Name of file being scanned
+ * @param found Number of files with metadata found
+ */
+void ui_render_scanning(int current, int total, const char *current_file, int found);
+
+/**
+ * Render scan complete screen
+ * @param found Number of files with metadata found
+ * @param total Total files scanned
+ */
+void ui_render_scan_complete(int found, int total);
+
+/**
+ * Render file options menu overlay
+ */
+void ui_render_file_menu(void);
+
+/**
+ * Render delete confirmation dialog
+ */
+void ui_render_confirm_delete(void);
+
+/**
+ * Render rename text input screen
+ */
+void ui_render_rename(void);
+
+/**
+ * Render YouTube search input screen
+ */
+void ui_render_youtube_search(void);
+
+/**
+ * Render YouTube search results list
+ */
+void ui_render_youtube_results(void);
+
+/**
+ * Render YouTube download progress
+ */
+void ui_render_youtube_download(void);
+
 #endif // UI_H

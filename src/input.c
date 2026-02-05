@@ -43,6 +43,8 @@
 #define JOY_SELECT  6
 #define JOY_START   7
 #define JOY_MENU    8
+#define JOY_VOL_UP  10  // Volume up (tentative - verify with debug output)
+#define JOY_VOL_DOWN 11 // Volume down (tentative - verify with debug output)
 
 // Button state tracking for debouncing (gamepad doesn't filter repeats like keyboard)
 static Uint8 g_button_state[16] = {0};
@@ -51,13 +53,18 @@ static Uint8 g_button_state[16] = {0};
 static Uint32 g_button_cooldown[16] = {0};
 #define BUTTON_COOLDOWN_MS 250  // Minimum ms between button presses
 
-// Y button hold tracking for help overlay
-static Uint32 g_y_press_time = 0;
-static bool g_y_held = false;
-#define Y_HOLD_THRESHOLD_MS 300  // Hold Y for 300ms to show help
+// Start button tracking for combos (Start+B = exit)
+static bool g_start_held = false;
+static bool g_start_combo_used = false;  // True if combo was triggered while Start held
 
 // Hat (D-Pad) state tracking - only trigger on state CHANGE
 static Uint8 g_hat_state = SDL_HAT_CENTERED;
+
+// Left/Right hold tracking for accelerated seek
+static Uint32 g_seek_start_time = 0;  // When Left/Right was first pressed
+static int g_seek_direction = 0;       // -1 for left, +1 for right, 0 for none
+static Uint32 g_last_seek_tick = 0;    // Last time we returned a seek amount
+
 
 InputAction input_handle_event(const SDL_Event *event) {
     switch (event->type) {
@@ -80,6 +87,7 @@ InputAction input_handle_event(const SDL_Event *event) {
                 case KEY_START:  return INPUT_MENU;
                 case KEY_SELECT: return INPUT_SHUFFLE;
                 case SDLK_ESCAPE:return INPUT_BACK;
+                case SDLK_h:     return INPUT_HELP;  // H key for help on desktop
                 // Hardware volume keys (Trimui Brick)
                 case SDLK_VOLUMEUP:   return INPUT_VOL_UP;
                 case SDLK_VOLUMEDOWN: return INPUT_VOL_DOWN;
@@ -111,20 +119,31 @@ InputAction input_handle_event(const SDL_Event *event) {
             fflush(stdout);
 
             // TRIMUI Brick button mapping (from NextUI platform.h)
-            // Note: JOY_B (index 0) is captured by system for "back to launcher"
             switch (btn) {
                 case JOY_A:      return INPUT_SELECT;   // A - confirm/play-pause
-                case JOY_X:      return INPUT_BACK;     // X - back (B captured by system)
+                case JOY_B:
+                    // Check for Start+B combo (exit)
+                    if (g_start_held) {
+                        g_start_combo_used = true;
+                        return INPUT_EXIT;
+                    }
+                    return INPUT_BACK;     // B - back
+                case JOY_X:      return INPUT_HELP;     // X - toggle help overlay
                 case JOY_Y:
-                    // Track Y press time for hold detection
-                    g_y_press_time = now;
-                    g_y_held = false;
-                    return INPUT_NONE;  // Don't trigger on press, wait for hold check or release
-                case JOY_L1:     return INPUT_PREV;     // L1 - previous track
-                case JOY_R1:     return INPUT_NEXT;     // R1 - next track
+                    return INPUT_FAVORITE;  // Y - toggle favorite
+                case JOY_L1:
+                    return INPUT_PREV;     // L1 - previous track
+                case JOY_R1:
+                    return INPUT_NEXT;     // R1 - next track
                 case JOY_SELECT: return INPUT_SHUFFLE;  // Select - shuffle/dim toggle
-                case JOY_START:  return INPUT_MENU;     // Start - menu
+                case JOY_START:
+                    // Track Start press for combos
+                    g_start_held = true;
+                    g_start_combo_used = false;
+                    return INPUT_NONE;  // Don't trigger menu yet, wait for release
                 case JOY_MENU:   return INPUT_MENU;     // Menu button
+                case JOY_VOL_UP:   return INPUT_VOL_UP;   // Hardware volume up
+                case JOY_VOL_DOWN: return INPUT_VOL_DOWN; // Hardware volume down
                 default: break;
             }
             break;
@@ -134,23 +153,21 @@ InputAction input_handle_event(const SDL_Event *event) {
             int btn = event->jbutton.button;
             if (btn < 16) g_button_state[btn] = 0;
 
-            // Y button release: if not held long enough, it's a tap (favorite)
-            if (btn == JOY_Y) {
-                if (!g_y_held && g_y_press_time > 0) {
-                    Uint32 now = SDL_GetTicks();
-                    if (now - g_y_press_time < Y_HOLD_THRESHOLD_MS) {
-                        g_y_press_time = 0;
-                        return INPUT_FAVORITE;  // Quick tap = toggle favorite
-                    }
+            // Start button release: trigger menu if no combo was used
+            if (btn == JOY_START) {
+                g_start_held = false;
+                if (!g_start_combo_used) {
+                    return INPUT_MENU;  // Start tap = menu
                 }
-                g_y_press_time = 0;
-                g_y_held = false;
+                g_start_combo_used = false;
             }
+
             return INPUT_NONE;
         }
 
         case SDL_JOYHATMOTION: {
             Uint8 new_state = event->jhat.value;
+            Uint32 now = SDL_GetTicks();
 
             // Only trigger on state CHANGE (debouncing)
             if (new_state == g_hat_state) {
@@ -159,6 +176,23 @@ InputAction input_handle_event(const SDL_Event *event) {
 
             Uint8 old_state = g_hat_state;
             g_hat_state = new_state;
+
+            // Track Left/Right for seek hold detection
+            if (new_state == SDL_HAT_LEFT) {
+                g_seek_start_time = now;
+                g_seek_direction = -1;
+                g_last_seek_tick = 0;
+            } else if (new_state == SDL_HAT_RIGHT) {
+                g_seek_start_time = now;
+                g_seek_direction = 1;
+                g_last_seek_tick = 0;
+            } else if (new_state == SDL_HAT_CENTERED ||
+                       new_state == SDL_HAT_UP ||
+                       new_state == SDL_HAT_DOWN) {
+                // Reset seek tracking when not left/right
+                g_seek_start_time = 0;
+                g_seek_direction = 0;
+            }
 
             // Only trigger when a direction is NEWLY pressed
             // (not when released or when already held)
@@ -179,17 +213,40 @@ InputAction input_handle_event(const SDL_Event *event) {
             break;
         }
 
-        case SDL_JOYAXISMOTION:
-            // Only log significant axis movements
+        case SDL_JOYAXISMOTION: {
+            Uint32 now = SDL_GetTicks();
+
+            // Only act on significant axis movements
             if (abs(event->jaxis.value) > 16000) {
                 printf("[AXIS] axis=%d value=%d\n", event->jaxis.axis, event->jaxis.value);
-                if (event->jaxis.axis == 0) {  // X axis
-                    return (event->jaxis.value < 0) ? INPUT_LEFT : INPUT_RIGHT;
-                } else if (event->jaxis.axis == 1) {  // Y axis
+                fflush(stdout);
+
+                if (event->jaxis.axis == 0) {  // X axis (Left/Right)
+                    if (event->jaxis.value < 0) {
+                        // LEFT pressed via axis - track for seek
+                        g_seek_start_time = now;
+                        g_seek_direction = -1;
+                        g_last_seek_tick = 0;
+                        return INPUT_LEFT;
+                    } else {
+                        // RIGHT pressed via axis - track for seek
+                        g_seek_start_time = now;
+                        g_seek_direction = 1;
+                        g_last_seek_tick = 0;
+                        return INPUT_RIGHT;
+                    }
+                } else if (event->jaxis.axis == 1) {  // Y axis (Up/Down)
                     return (event->jaxis.value < 0) ? INPUT_UP : INPUT_DOWN;
+                }
+            } else if (abs(event->jaxis.value) < 8000) {
+                // Axis returned to center - reset seek if X axis
+                if (event->jaxis.axis == 0 && g_seek_direction != 0) {
+                    g_seek_start_time = 0;
+                    g_seek_direction = 0;
                 }
             }
             break;
+        }
 
         default:
             break;
@@ -199,13 +256,44 @@ InputAction input_handle_event(const SDL_Event *event) {
 }
 
 InputAction input_poll_holds(void) {
-    // Check if Y is being held past threshold
-    if (g_y_press_time > 0 && !g_y_held && g_button_state[JOY_Y]) {
-        Uint32 now = SDL_GetTicks();
-        if (now - g_y_press_time >= Y_HOLD_THRESHOLD_MS) {
-            g_y_held = true;
-            return INPUT_HELP;
-        }
-    }
+    // No hold detection needed - X triggers help directly
+    // Keep function for potential future use
     return INPUT_NONE;
+}
+
+bool input_is_seeking(void) {
+    return g_seek_direction != 0 && g_seek_start_time > 0;
+}
+
+int input_get_seek_amount(void) {
+    if (!input_is_seeking()) {
+        return 0;
+    }
+
+    Uint32 now = SDL_GetTicks();
+    Uint32 held_ms = now - g_seek_start_time;
+
+    // Rate limit: only return seek amount every 150ms
+    if (g_last_seek_tick > 0 && now - g_last_seek_tick < 150) {
+        return 0;
+    }
+    g_last_seek_tick = now;
+
+    // Acceleration based on hold duration
+    int seek_seconds;
+    if (held_ms < 1000) {
+        // 0-1 second: 5 seconds per tick
+        seek_seconds = 5;
+    } else if (held_ms < 2000) {
+        // 1-2 seconds: 15 seconds per tick
+        seek_seconds = 15;
+    } else if (held_ms < 3000) {
+        // 2-3 seconds: 30 seconds per tick
+        seek_seconds = 30;
+    } else {
+        // 3+ seconds: 60 seconds per tick (1 minute)
+        seek_seconds = 60;
+    }
+
+    return seek_seconds * g_seek_direction;
 }
