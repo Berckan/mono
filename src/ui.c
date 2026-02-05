@@ -1249,7 +1249,11 @@ void ui_render_file_menu(void) {
     // Controls hint (same position as help overlay)
     render_text_centered("A:Select  B:Cancel", box_y + box_h - 60, g_font_small, COLOR_DIM);
 
-    SDL_RenderPresent(g_renderer);
+    // Only present if confirm dialog won't follow
+    // (caller handles present when showing confirm overlay)
+    if (!filemenu_needs_confirm()) {
+        SDL_RenderPresent(g_renderer);
+    }
 }
 
 void ui_render_confirm_delete(void) {
