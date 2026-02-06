@@ -2,7 +2,7 @@
 
 <!-- TODO: Add monito isotipo here -->
 
-Minimalist MP3 player for **Trimui Brick** running NextUI/MinUI custom firmware.
+Feature-rich music player for **Trimui Brick** running NextUI/MinUI custom firmware.
 
 ![Mono Screenshot](docs/screenshot.png)
 
@@ -15,12 +15,25 @@ Minimalist MP3 player for **Trimui Brick** running NextUI/MinUI custom firmware.
 - **Display** ID3 metadata (title, artist, album)
 - **Cover Art** - Shows album covers from folder
 - **Resume** - Remembers position per file
+- **Gapless Playback** - Seamless transitions between FLAC tracks
+
+### Audio
+
+- **5-Band Equalizer** - 60Hz, 250Hz, 1kHz, 4kHz, 16kHz (±12dB)
+- **Bluetooth Audio** - A2DP wireless via bluealsa
+- **Spotify Connect** - Use Trimui Brick as a Spotify receiver via librespot
 
 ### YouTube Integration
 
 - **Search** YouTube Music with on-screen keyboard
 - **Download** tracks via yt-dlp
 - **Stream** directly without leaving the app
+
+### Navigation
+
+- **Home Menu** - Resume, Browse, Favorites, YouTube, Spotify
+- **Resume List** - All tracks with saved positions
+- **Favorites** - Quick access to starred tracks
 
 ### File Management
 
@@ -31,9 +44,16 @@ Minimalist MP3 player for **Trimui Brick** running NextUI/MinUI custom firmware.
 ### Customization
 
 - **Themes** - Dark/Light mode toggle
-- **8-bit UI** - Retro high-contrast design
+- **8-bit UI** - Retro high-contrast design with neon green accents
 - **Shuffle/Repeat** - Playback modes
 - **Sleep Timer** - Auto-stop after 15/30/60 min
+
+### System
+
+- **Self-Update** - Check and install updates from GitHub releases
+- **Pocket Mode** - Power button suspend with LED heartbeat
+- **WiFi/Bluetooth Indicators** - Status bar shows connectivity
+- **Screen Dimming** - Battery-saving display control
 
 ## Build
 
@@ -42,7 +62,7 @@ Minimalist MP3 player for **Trimui Brick** running NextUI/MinUI custom firmware.
 ```bash
 # Requires SDL2, SDL2_mixer, SDL2_ttf
 make desktop
-./build/mono
+./build/mono /path/to/music
 ```
 
 ### Trimui Brick
@@ -83,31 +103,52 @@ Copy `Mono.pak/` to `/Tools/tg5040/` on your SD card.
 | X        | Cycle theme       |
 | Y        | Toggle favorite   |
 | L/R      | Prev / Next track |
+| L2/R2    | Seek ±30s / ±60s  |
 | Start    | Options menu      |
 | Select   | Dim screen        |
+
+### Home Menu
+
+| Button   | Action   |
+| -------- | -------- |
+| D-Pad ↑↓ | Navigate |
+| A        | Select   |
+| B        | Exit app |
 
 ## Project Structure
 
 ```
 mono/
 ├── src/
-│   ├── main.c        # Entry point, app loop
-│   ├── audio.c       # SDL_mixer playback
-│   ├── browser.c     # File navigation
-│   ├── ui.c          # SDL2 rendering
-│   ├── input.c       # Button handling
-│   ├── cover.c       # Album art loading
-│   ├── theme.c       # Dark/Light themes
-│   ├── youtube.c     # yt-dlp integration
-│   ├── ytsearch.c    # YouTube search UI
-│   ├── metadata.c    # MusicBrainz API
-│   ├── positions.c   # Position persistence
-│   ├── filemenu.c    # File context menu
-│   └── state.c       # App state persistence
-├── Mono.pak/         # Packaged app
-│   ├── launch.sh     # Entry script
-│   ├── bin/          # Compiled binary
-│   └── pak.json      # NextUI metadata
+│   ├── main.c            # Entry point, state machine
+│   ├── audio.c           # SDL_mixer playback
+│   ├── browser.c         # File navigation
+│   ├── ui.c              # SDL2 rendering
+│   ├── input.c           # Button/power handling
+│   ├── cover.c           # Album art loading
+│   ├── theme.c           # Dark/Light themes
+│   ├── equalizer.c       # 5-band parametric EQ
+│   ├── preload.c         # Gapless playback preloader
+│   ├── youtube.c         # yt-dlp integration
+│   ├── ytsearch.c        # YouTube search UI
+│   ├── spotify.c         # librespot lifecycle
+│   ├── spotify_audio.c   # Spotify playback pipeline
+│   ├── spsearch.c        # Spotify search UI
+│   ├── metadata.c        # MusicBrainz API
+│   ├── positions.c       # Position persistence
+│   ├── filemenu.c        # File context menu
+│   ├── state.c           # App state persistence
+│   ├── favorites.c       # Favorites management
+│   ├── screen.c          # Backlight/suspend control
+│   ├── sysinfo.c         # System info (WiFi/BT)
+│   ├── update.c          # OTA self-update
+│   ├── download_queue.c  # Background downloads
+│   ├── menu.c            # Options menu
+│   └── version.h         # Version string
+├── Mono.pak/             # Packaged app
+│   ├── launch.sh         # Entry script
+│   ├── bin/              # Compiled binary
+│   └── pak.json          # NextUI metadata
 ├── Makefile
 └── README.md
 ```
@@ -118,11 +159,14 @@ mono/
 - SDL2_mixer (MP3/FLAC/OGG support)
 - SDL2_ttf (font rendering)
 - yt-dlp (optional, for YouTube)
-- curl (optional, for MusicBrainz)
+- curl (optional, for MusicBrainz/updates)
+- librespot (optional, for Spotify Connect)
+- bluealsa (optional, for Bluetooth audio)
 
 ## Known Issues
 
 - **FLAC Resume**: Some FLAC files may start from the beginning instead of the saved position when resuming. This affects files without proper seek tables. MP3 files are not affected.
+- **Spotify Search**: Disabled pending Spotify Developer API access (new app creation blocked by Spotify as of Feb 2026). Spotify Connect receiver mode works.
 
 ## License
 

@@ -1,5 +1,101 @@
 # Changelog
 
+## [2026.02.06] - v1.9.0
+
+### Added
+
+- Feat(UI): WiFi/Bluetooth status indicators in status bar
+  WHY: Users need to know connectivity state at a glance for Spotify Connect and Bluetooth audio.
+
+- Feat(UI): Dynamic list row calculation based on screen height
+  WHY: Hardcoded row count didn't adapt to different screen resolutions or UI changes.
+
+- Feat(UI): Scrolling text for long filenames in browser
+  WHY: Long filenames were truncated — scrolling reveals the full name on highlight.
+
+- Feat(UI): File extension dimming (gray .mp3/.flac suffixes)
+  WHY: Reduces visual noise — the extension is secondary info compared to the track name.
+
+### Changed
+
+- Changed(Theme): Accent color changed to neon green (#33FF33)
+  WHY: Higher contrast on the retro UI, better visibility on the Trimui screen.
+
+- Changed(Sysinfo): WiFi/BT connectivity detection with 5-second cache
+  WHY: Avoids expensive filesystem checks on every frame while staying responsive.
+
+---
+
+## [2026.02.06] - v1.8.0
+
+### Added
+
+- Feat(Bluetooth): Bluetooth audio via bluealsa with A2DP
+  WHY: Wireless headphone/speaker support — the most requested feature for a portable player.
+
+- Feat(Spotify): Spotify Connect via librespot integration
+  WHY: Stream from Spotify to the Trimui Brick, turning it into a Spotify Connect receiver.
+
+- Feat(Update): Self-update from GitHub releases
+  WHY: OTA updates without needing to manually copy files to SD card.
+
+- Feat(Power): Pocket mode — power button suspend with LED heartbeat
+  WHY: Screen off during pocket playback saves battery while confirming the device is alive.
+
+- Feat(Input): L2/R2 analog trigger seek controls (±30s/±60s)
+  WHY: Faster seeking through long tracks and podcasts.
+
+- Feat(Audio): Audio format display (MP3/FLAC/OGG) in player
+  WHY: Users want to know what format they're listening to.
+
+### Changed
+
+- Changed(Power): EVIOCGRAB exclusive grab on power button device
+  WHY: Prevents keymon.elf from consuming power button events before Mono reads them.
+
+- Changed(Launch): WiFi reconnect (ensure_wifi) in launch.sh
+  WHY: NextUI may drop WiFi — reconnecting ensures Spotify/YouTube features work.
+
+### Technical
+
+- Added `spotify.c/h` — librespot lifecycle management
+- Added `spotify_audio.c/h` — Spotify audio playback pipeline
+- Added `spsearch.c/h` — Spotify search UI
+- Added `update.c/h` — GitHub release checker and OTA updater
+- Added `download_queue.c/h` — Background download manager
+- Added `version.h` — Version string for update checks
+
+---
+
+## [2026.02.06] - v1.7.0
+
+### Added
+
+- Feat(Home): Home menu with Resume, Browse, Favorites, YouTube, Spotify
+  WHY: Better navigation structure — dedicated entry points instead of cramming everything into the browser.
+
+- Feat(EQ): 5-band parametric equalizer (60Hz, 250Hz, 1kHz, 4kHz, 16kHz)
+  WHY: Audio customization for different headphones and genres, ±12dB per band.
+
+- Feat(Audio): Gapless playback for FLAC via background preloading
+  WHY: Eliminates the 200-600ms silence gap between tracks for seamless album listening.
+
+- Feat(UI): Resume prompt when reopening tracks with saved positions
+  WHY: Prevents accidental position loss — user chooses Resume or Start Over.
+
+- Feat(Power): Power button suspend/resume support on Trimui
+  WHY: Hardware power button integration for proper sleep/wake behavior.
+
+- Feat(UI): Player title/artist text scrolling, toast notifications
+  WHY: Long metadata was truncated — scrolling reveals full text.
+
+### Technical
+
+- Added `equalizer.c/h` — 5-band biquad IIR filter via Mix_SetPostMix
+- Added `preload.c/h` — Background audio preloader for gapless playback
+
+---
+
 ## [2026.02.05] - v1.6.0
 
 ### Added
