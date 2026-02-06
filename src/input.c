@@ -17,10 +17,13 @@
 #include "input.h"
 #include <stdio.h>
 #include <stdbool.h>
+#include <errno.h>
+#include <string.h>
 
 #ifdef __linux__
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/ioctl.h>
 #include <linux/input.h>
 #endif
 
@@ -84,10 +87,53 @@ static bool g_l2_triggered = false;
 static bool g_r2_triggered = false;
 
 // Power button device (Linux only - reads from /dev/input/event1)
+//
+// IMPORTANT: Power button handling on Trimui/NextUI is complex!
+//
+// Problem: NextUI's keymon.elf daemon also reads from /dev/input/event1
+// and can consume events before we read them, causing intermittent failures.
+//
+// Solution: Use EVIOCGRAB ioctl to get exclusive access to the device.
+// This prevents keymon from stealing our events.
+//
+// Caveat: The exclusive grab is LOST after system suspend/resume!
+// We must re-grab in input_drain_power() which is called after wake.
+//
+// Debugging: Check competing readers with:
+//   ls -la /proc/*/fd/* 2>/dev/null | grep event1
+//
+// See MEMORY.md for full documentation of this issue.
 #ifdef __linux__
 static int g_power_fd = -1;
+static int g_volume_fd = -1;
 #define POWER_BUTTON_DEVICE "/dev/input/event1"
-#define KEY_POWER_CODE 116  // KEY_POWER from linux/input-event-codes.h
+#define KEY_POWER_CODE 116       // KEY_POWER from linux/input-event-codes.h
+#define KEY_VOLUMEDOWN_CODE 114  // KEY_VOLUMEDOWN
+#define KEY_VOLUMEUP_CODE 115    // KEY_VOLUMEUP
+
+// Find AVRCP device for BT volume control (returns fd or -1)
+static int find_avrcp_device(void) {
+    char path[128], name[256];
+    for (int i = 0; i < 10; i++) {
+        snprintf(path, sizeof(path), "/sys/class/input/event%d/device/name", i);
+        FILE *f = fopen(path, "r");
+        if (!f) continue;
+        if (fgets(name, sizeof(name), f)) {
+            fclose(f);
+            if (strstr(name, "AVRCP")) {
+                snprintf(path, sizeof(path), "/dev/input/event%d", i);
+                int fd = open(path, O_RDONLY | O_NONBLOCK);
+                if (fd >= 0) {
+                    printf("[INPUT] Found AVRCP device: %s (%s)\n", path, name);
+                    return fd;
+                }
+            }
+        } else {
+            fclose(f);
+        }
+    }
+    return -1;
+}
 #endif
 
 
@@ -360,7 +406,27 @@ bool input_init(void) {
         printf("[INPUT] Warning: Could not open power button device %s\n", POWER_BUTTON_DEVICE);
         // Not fatal - power button just won't work
     } else {
-        printf("[INPUT] Power button device opened: %s\n", POWER_BUTTON_DEVICE);
+        printf("[INPUT] Power button device opened: %s (fd=%d)\n", POWER_BUTTON_DEVICE, g_power_fd);
+
+        // Grab device exclusively to prevent keymon.elf from consuming events
+        if (ioctl(g_power_fd, EVIOCGRAB, 1) < 0) {
+            printf("[INPUT] Warning: Could not grab power button exclusively: %s\n", strerror(errno));
+        } else {
+            printf("[INPUT] Power button grabbed exclusively\n");
+        }
+    }
+
+    // Find and open AVRCP device for BT volume control
+    g_volume_fd = find_avrcp_device();
+    if (g_volume_fd >= 0) {
+        // Grab device exclusively to handle volume ourselves
+        if (ioctl(g_volume_fd, EVIOCGRAB, 1) < 0) {
+            printf("[INPUT] Warning: Could not grab AVRCP volume exclusively: %s\n", strerror(errno));
+        } else {
+            printf("[INPUT] AVRCP volume grabbed exclusively\n");
+        }
+    } else {
+        printf("[INPUT] No AVRCP device found (BT headphone not connected?)\n");
     }
 #endif
     return true;
@@ -369,9 +435,17 @@ bool input_init(void) {
 void input_cleanup(void) {
 #ifdef __linux__
     if (g_power_fd >= 0) {
+        // Release exclusive grab before closing
+        ioctl(g_power_fd, EVIOCGRAB, 0);
         close(g_power_fd);
         g_power_fd = -1;
         printf("[INPUT] Power button device closed\n");
+    }
+    if (g_volume_fd >= 0) {
+        ioctl(g_volume_fd, EVIOCGRAB, 0);
+        close(g_volume_fd);
+        g_volume_fd = -1;
+        printf("[INPUT] AVRCP volume device closed\n");
     }
 #endif
 }
@@ -385,8 +459,9 @@ InputAction input_poll_power(void) {
     struct input_event ev;
     while (read(g_power_fd, &ev, sizeof(ev)) == sizeof(ev)) {
         // Check for KEY_POWER press (type=EV_KEY, code=KEY_POWER, value=1)
+        // value: 1=press, 0=release, 2=repeat (held down)
         if (ev.type == EV_KEY && ev.code == KEY_POWER_CODE && ev.value == 1) {
-            printf("[POWER] Power button pressed!\n");
+            printf("[POWER] Power button pressed\n");
             fflush(stdout);
             return INPUT_SUSPEND;
         }
@@ -404,6 +479,11 @@ void input_drain_power(void) {
     // Small delay to let any pending events arrive
     usleep(100000);  // 100ms
 
+    // Re-grab device after wake (grab may be lost after system suspend)
+    if (ioctl(g_power_fd, EVIOCGRAB, 1) < 0) {
+        printf("[POWER] Warning: Re-grab failed after wake: %s\n", strerror(errno));
+    }
+
     // Drain all pending events
     struct input_event ev;
     int drained = 0;
@@ -413,4 +493,32 @@ void input_drain_power(void) {
     printf("[POWER] Drained %d events after wake\n", drained);
     fflush(stdout);
 #endif
+}
+
+InputAction input_poll_volume(void) {
+#ifdef __linux__
+    if (g_volume_fd < 0) {
+        return INPUT_NONE;
+    }
+
+    struct input_event ev;
+    while (read(g_volume_fd, &ev, sizeof(ev)) == sizeof(ev)) {
+        // Debug: log all key events from AVRCP
+        if (ev.type == EV_KEY) {
+            printf("[AVRCP] Key event: code=%d value=%d\n", ev.code, ev.value);
+            fflush(stdout);
+        }
+        // Check for volume key press (type=EV_KEY, value=1 for press)
+        if (ev.type == EV_KEY && ev.value == 1) {
+            if (ev.code == KEY_VOLUMEUP_CODE) {
+                printf("[AVRCP] Volume UP detected\n");
+                return INPUT_VOL_UP;
+            } else if (ev.code == KEY_VOLUMEDOWN_CODE) {
+                printf("[AVRCP] Volume DOWN detected\n");
+                return INPUT_VOL_DOWN;
+            }
+        }
+    }
+#endif
+    return INPUT_NONE;
 }

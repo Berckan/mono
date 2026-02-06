@@ -87,4 +87,10 @@ InputAction input_poll_power(void);
  */
 void input_drain_power(void);
 
+/**
+ * Poll hardware volume buttons (reads from /dev/input/event0 on Linux)
+ * @return INPUT_VOL_UP, INPUT_VOL_DOWN, or INPUT_NONE
+ */
+InputAction input_poll_volume(void);
+
 #endif // INPUT_H

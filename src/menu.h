@@ -42,7 +42,8 @@ typedef enum {
 typedef enum {
     MENU_RESULT_NONE,       // Stay in menu (toggled an option)
     MENU_RESULT_CLOSE,      // Close menu, return to caller
-    MENU_RESULT_EQUALIZER   // Open equalizer screen
+    MENU_RESULT_EQUALIZER,  // Open equalizer screen
+    MENU_RESULT_UPDATE      // Open update screen
 } MenuResult;
 
 /**
@@ -55,6 +56,7 @@ typedef enum {
     MENU_EQUALIZER,
     MENU_THEME,
     MENU_POWER,
+    MENU_UPDATE,
     MENU_ITEM_COUNT
 } MenuItem;
 

@@ -40,6 +40,20 @@ static const char *MAX_BRIGHTNESS_PATHS[] = {
 // Framebuffer blank path for display on/off
 #define FB_BLANK_PATH "/sys/class/graphics/fb0/blank"
 
+// LED animation sysfs paths (Trimui Brick)
+#define LED_ANIM_PATH "/sys/class/led_anim/"
+#define LED_MAX_SCALE LED_ANIM_PATH "max_scale"
+#define LED_MAX_SCALE_F1F2 LED_ANIM_PATH "max_scale_f1f2"
+#define LED_MAX_SCALE_LR LED_ANIM_PATH "max_scale_lr"
+#define LED_EFFECT_F1 LED_ANIM_PATH "effect_f1"
+#define LED_EFFECT_RGB_F1 LED_ANIM_PATH "effect_rgb_hex_f1"
+#define LED_EFFECT_CYCLES_F1 LED_ANIM_PATH "effect_cycles_f1"
+#define LED_EFFECT_DURATION_F1 LED_ANIM_PATH "effect_duration_f1"
+
+// Heartbeat: 1 green blink every 10 seconds
+#define LED_HEARTBEAT_INTERVAL_MS 10000
+#define LED_HEARTBEAT_BLINK_MS 200
+
 // State
 static int g_saved_brightness = -1;
 static int g_saved_brightness_lcd = 255;  // For /dev/disp control (0-255)
@@ -48,6 +62,12 @@ static bool g_is_dimmed = false;
 static bool g_is_off = false;  // Complete display off (via /dev/disp)
 static const char *g_brightness_path = NULL;
 static int g_disp_fd = -1;  // File descriptor for /dev/disp
+
+// LED state saved before pocket mode
+static int g_saved_led_max_scale = -1;
+static int g_saved_led_max_scale_f1f2 = -1;
+static int g_saved_led_max_scale_lr = -1;
+static bool g_leds_off = false;
 
 // Dim to 10% of max brightness
 #define DIM_PERCENT 10
@@ -236,6 +256,56 @@ void screen_cleanup(void) {
 }
 
 /**
+ * Write string value to sysfs file
+ */
+static int write_sysfs_str(const char *path, const char *value) {
+    FILE *f = fopen(path, "w");
+    if (!f) return -1;
+
+    int result = fputs(value, f);
+    fclose(f);
+    return (result >= 0) ? 0 : -1;
+}
+
+/**
+ * Save current LED state and turn off all LEDs
+ */
+static void leds_save_and_off(void) {
+    if (g_leds_off) return;
+
+    // Save current brightness scales
+    g_saved_led_max_scale = read_sysfs_int(LED_MAX_SCALE);
+    g_saved_led_max_scale_f1f2 = read_sysfs_int(LED_MAX_SCALE_F1F2);
+    g_saved_led_max_scale_lr = read_sysfs_int(LED_MAX_SCALE_LR);
+
+    // Turn off all LEDs
+    write_sysfs_int(LED_MAX_SCALE, 0);
+    write_sysfs_int(LED_MAX_SCALE_F1F2, 0);
+    write_sysfs_int(LED_MAX_SCALE_LR, 0);
+
+    g_leds_off = true;
+    printf("[SCREEN] LEDs OFF (pocket mode)\n");
+}
+
+/**
+ * Restore saved LED state
+ */
+static void leds_restore(void) {
+    if (!g_leds_off) return;
+
+    // Restore brightness scales
+    if (g_saved_led_max_scale >= 0)
+        write_sysfs_int(LED_MAX_SCALE, g_saved_led_max_scale);
+    if (g_saved_led_max_scale_f1f2 >= 0)
+        write_sysfs_int(LED_MAX_SCALE_F1F2, g_saved_led_max_scale_f1f2);
+    if (g_saved_led_max_scale_lr >= 0)
+        write_sysfs_int(LED_MAX_SCALE_LR, g_saved_led_max_scale_lr);
+
+    g_leds_off = false;
+    printf("[SCREEN] LEDs restored\n");
+}
+
+/**
  * Turn display off by setting brightness to 0 (disp2 driver)
  */
 void screen_off(void) {
@@ -251,6 +321,9 @@ void screen_off(void) {
     if (current > 0) {
         g_saved_brightness_lcd = current;
     }
+
+    // Turn off LEDs (pocket mode)
+    leds_save_and_off();
 
     // Turn off by setting brightness to 0
     if (disp_set_brightness(0) == 0) {
@@ -276,6 +349,10 @@ void screen_on(void) {
     if (disp_set_brightness(restore_value) == 0) {
         g_is_off = false;
         g_is_dimmed = false;
+
+        // Restore LEDs
+        leds_restore();
+
         printf("[SCREEN] LCD ON (brightness=%d)\n", restore_value);
     }
 }
@@ -285,6 +362,36 @@ void screen_on(void) {
  */
 bool screen_is_off(void) {
     return g_is_off;
+}
+
+/**
+ * LED heartbeat for pocket mode: brief green blink on f1 every 10 seconds.
+ * Call from main loop. Uses Uint32 ticks (SDL_GetTicks).
+ */
+void screen_update_led_heartbeat(unsigned int now_ms) {
+    if (!g_is_off || !g_leds_off) return;
+
+    static unsigned int last_blink = 0;
+    static bool blink_on = false;
+
+    if (blink_on) {
+        // Turn off after blink duration
+        if (now_ms - last_blink >= LED_HEARTBEAT_BLINK_MS) {
+            write_sysfs_int(LED_MAX_SCALE_F1F2, 0);
+            blink_on = false;
+        }
+        return;
+    }
+
+    if (now_ms - last_blink >= LED_HEARTBEAT_INTERVAL_MS) {
+        // Set f1 to green static blink
+        write_sysfs_str(LED_EFFECT_RGB_F1, "00FF00 ");
+        write_sysfs_int(LED_EFFECT_F1, 4);  // static
+        write_sysfs_int(LED_EFFECT_CYCLES_F1, 1);
+        write_sysfs_int(LED_MAX_SCALE_F1F2, 10);  // dim green
+        last_blink = now_ms;
+        blink_on = true;
+    }
 }
 
 /**

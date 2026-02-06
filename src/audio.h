@@ -95,6 +95,13 @@ void audio_set_volume(int volume);
 int audio_get_volume(void);
 
 /**
+ * Enable/disable Bluetooth audio mode
+ * When enabled, volume changes also sync with bluealsa
+ * @param enabled true to enable BT mode
+ */
+void audio_set_bluetooth_mode(bool enabled);
+
+/**
  * Update audio state (call every frame)
  */
 void audio_update(void);
@@ -119,6 +126,19 @@ const int16_t* audio_get_pcm_data(size_t *sample_count, int *channels, int *samp
  * @return Always false (waveform feature removed)
  */
 bool audio_has_pcm_data(void);
+
+/**
+ * Get uppercase format string for currently playing track
+ * @return "MP3", "FLAC", "OGG", "WAV", "M4A", "WEBM", "OPUS", or ""
+ */
+const char* audio_get_format_string(void);
+
+/**
+ * Get uppercase format string from any file path (extension-based)
+ * @param path File path to check
+ * @return "MP3", "FLAC", "OGG", "WAV", "M4A", "WEBM", "OPUS", or ""
+ */
+const char* audio_format_from_path(const char *path);
 
 /**
  * Check if currently loaded track is a FLAC file

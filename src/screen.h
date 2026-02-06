@@ -71,6 +71,12 @@ bool screen_is_off(void);
 bool screen_switch_is_on(void);
 
 /**
+ * LED heartbeat for pocket mode: brief green blink on f1 every 10 seconds.
+ * Call from main loop with SDL_GetTicks() value.
+ */
+void screen_update_led_heartbeat(unsigned int now_ms);
+
+/**
  * Trigger system suspend (deep sleep)
  * Uses echo mem > /sys/power/state like NextUI
  * System will wake on power button press

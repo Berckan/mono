@@ -116,6 +116,10 @@ static int parse_amixer_volume(void) {
 static void refresh_battery_if_needed(void) {
     unsigned long now = get_time_ms();
     if (now - g_last_battery_refresh >= BATTERY_REFRESH_MS || g_last_battery_refresh == 0) {
+#ifdef __APPLE__
+        g_cached_battery = 73;
+        g_cached_status = BATTERY_DISCHARGING;
+#else
         int value = read_sysfs_int(BATTERY_CAPACITY_PATH);
         if (value >= 0) {
             g_cached_battery = value;
@@ -134,7 +138,7 @@ static void refresh_battery_if_needed(void) {
                 g_cached_status = BATTERY_UNKNOWN;
             }
         }
-
+#endif
         g_last_battery_refresh = now;
     }
 }
@@ -145,10 +149,14 @@ static void refresh_battery_if_needed(void) {
 static void refresh_volume_if_needed(void) {
     unsigned long now = get_time_ms();
     if (now - g_last_volume_refresh >= VOLUME_REFRESH_MS || g_last_volume_refresh == 0) {
+#ifdef __APPLE__
+        g_cached_volume = 65;
+#else
         int value = parse_amixer_volume();
         if (value >= 0) {
             g_cached_volume = value;
         }
+#endif
         g_last_volume_refresh = now;
     }
 }

@@ -38,6 +38,10 @@
 #include "download_queue.h"
 #include "equalizer.h"
 #include "preload.h"
+#include "spotify.h"
+#include "spsearch.h"
+#include "spotify_audio.h"
+#include "update.h"
 
 // Screen dimensions (auto-detected at runtime)
 static int g_screen_width = 1280;   // Fallback
@@ -63,10 +67,15 @@ typedef enum {
     STATE_YOUTUBE_RESULTS,  // YouTube results list
     STATE_YOUTUBE_DOWNLOAD, // YouTube download progress
     STATE_DOWNLOAD_QUEUE,   // Download queue list view
-    STATE_SEEKING,      // Seeking in FLAC file (shows loading)
-    STATE_EQUALIZER,    // Equalizer screen (bass/treble horizontal bars)
-    STATE_ERROR,        // Error loading file
-    STATE_RESUME_PROMPT // Ask user if they want to resume from saved position
+    STATE_SEEKING,          // Seeking in FLAC file (shows loading)
+    STATE_EQUALIZER,        // Equalizer screen (bass/treble horizontal bars)
+    STATE_SPOTIFY_CONNECT,  // Waiting for phone to connect via Spotify Connect
+    STATE_SPOTIFY_SEARCH,   // Spotify search input keyboard
+    STATE_SPOTIFY_RESULTS,  // Spotify search results list
+    STATE_SPOTIFY_PLAYING,  // Spotify now-playing (streaming)
+    STATE_UPDATE,           // Self-update screen (check, download, apply)
+    STATE_ERROR,            // Error loading file
+    STATE_RESUME_PROMPT     // Ask user if they want to resume from saved position
 } AppState;
 
 // Global state
@@ -76,7 +85,7 @@ static char g_error_message[256] = {0};  // Last error message
 static char g_loading_file[256] = {0};   // File being loaded
 
 // Home menu state
-typedef enum { HOME_RESUME, HOME_BROWSE, HOME_FAVORITES, HOME_YOUTUBE, HOME_COUNT } HomeItem;
+typedef enum { HOME_RESUME, HOME_BROWSE, HOME_FAVORITES, HOME_YOUTUBE, HOME_SPOTIFY, HOME_COUNT } HomeItem;
 static int g_home_cursor = HOME_BROWSE;  // Default to Browse
 
 // Resume list state
@@ -172,13 +181,92 @@ static int init_sdl(void) {
         return -1;
     }
 
+    // Check if Bluetooth audio is configured (for later use after Mix_OpenAudio succeeds)
+    bool bluealsa_configured = false;
+    char bt_device_mac[32] = {0};
+    #ifdef __linux__
+    {
+        FILE *f = fopen("/mnt/SDCARD/.userdata/tg5040/.asoundrc", "r");
+        if (f) {
+            char buf[256];
+            while (fgets(buf, sizeof(buf), f)) {
+                if (strstr(buf, "bluealsa")) {
+                    bluealsa_configured = true;
+                }
+                // Extract device MAC: defaults.bluealsa.device "XX:XX:XX:XX:XX:XX"
+                char *device = strstr(buf, "device \"");
+                if (device) {
+                    device += 8;  // Skip 'device "'
+                    char *end = strchr(device, '"');
+                    if (end && (end - device) == 17) {  // MAC is 17 chars
+                        strncpy(bt_device_mac, device, 17);
+                        bt_device_mac[17] = '\0';
+                    }
+                }
+            }
+            fclose(f);
+        }
+        // Ensure A2DP profile is connected (not just BT control channel)
+        if (bluealsa_configured && bt_device_mac[0]) {
+            printf("Ensuring A2DP connection to %s...\n", bt_device_mac);
+            char cmd[128];
+            snprintf(cmd, sizeof(cmd), "bluetoothctl connect %s >/dev/null 2>&1", bt_device_mac);
+            system(cmd);
+            SDL_Delay(500);  // Give A2DP time to establish
+        }
+    }
+    #endif
+
     // Initialize SDL_mixer for audio playback
     // 44100 Hz (CD quality), signed 16-bit, stereo, 2048 sample buffer
-    if (Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 2048) < 0) {
-        fprintf(stderr, "Mix_OpenAudio failed: %s\n", Mix_GetError());
-        TTF_Quit();
-        SDL_Quit();
-        return -1;
+    // Try bluealsa first if configured, fall back to default if it fails
+    bool using_bluetooth = false;
+    #ifdef __linux__
+    if (bluealsa_configured) {
+        SDL_setenv("AUDIODEV", "bluealsa", 1);
+        // Retry bluealsa a few times - it may need time to initialize
+        for (int retry = 0; retry < 3 && !using_bluetooth; retry++) {
+            if (retry > 0) {
+                printf("Retrying bluealsa (%d/3)...\n", retry + 1);
+                SDL_Delay(500);  // Wait 500ms between retries
+            }
+            if (Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 2048) == 0) {
+                printf("Bluetooth audio (bluealsa) opened successfully\n");
+                using_bluetooth = true;
+                // Enable BT mode (detects control name) and set volume to 100%
+                audio_set_bluetooth_mode(true);
+                audio_set_volume(100);
+            }
+        }
+        if (!using_bluetooth) {
+            printf("Bluetooth audio failed after retries (%s), falling back to default\n", Mix_GetError());
+            SDL_setenv("AUDIODEV", "", 1);  // Clear to use default
+        }
+    }
+    #endif
+
+    if (!using_bluetooth) {
+        // If bluealsa was configured but failed, .asoundrc affects ALSA globally
+        // Temporarily rename it so ALSA uses default hardware device
+        #ifdef __linux__
+        if (bluealsa_configured) {
+            printf("Disabling .asoundrc to use default audio\n");
+            int r = rename("/mnt/SDCARD/.userdata/tg5040/.asoundrc",
+                           "/mnt/SDCARD/.userdata/tg5040/.asoundrc.disabled");
+            printf("Rename result: %d\n", r);
+            SDL_setenv("AUDIODEV", "", 1);  // Clear any AUDIODEV setting
+            // Give ALSA time to notice the config change
+            SDL_Delay(100);
+        }
+        #endif
+        printf("Opening default audio...\n");
+        if (Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 2048) < 0) {
+            fprintf(stderr, "Mix_OpenAudio (default) failed: %s\n", Mix_GetError());
+            TTF_Quit();
+            SDL_Quit();
+            return -1;
+        }
+        printf("Default audio opened successfully\n");
     }
 
     return 0;
@@ -324,6 +412,9 @@ static void cleanup(void) {
     metadata_cleanup();
     dlqueue_shutdown();
     youtube_cleanup();
+    spotify_cleanup();
+    sp_audio_cleanup();
+    update_cleanup();
     preload_cleanup();
     eq_cleanup();
     audio_cleanup();
@@ -364,7 +455,7 @@ static void handle_input(AppState *state) {
     }
 
     // Poll for seek (Left/Right D-pad held) - only in player state
-    if (*state == STATE_PLAYING && input_is_seeking()) {
+    if (*state == STATE_PLAYING && input_is_seeking() && !screen_is_off()) {
         int seek_amount = input_get_seek_amount();
         if (seek_amount != 0) {
             audio_seek(seek_amount);
@@ -381,7 +472,20 @@ static void handle_input(AppState *state) {
         if (was_playing) audio_toggle_pause();
     }
 
+    // Poll hardware volume buttons (reads from /dev/input/event0 on Linux)
+    InputAction vol_action = input_poll_volume();
+    if (vol_action == INPUT_VOL_UP) {
+        int vol = audio_get_volume();
+        audio_set_volume(vol + 5);
+    } else if (vol_action == INPUT_VOL_DOWN) {
+        int vol = audio_get_volume();
+        audio_set_volume(vol - 5);
+    }
+
     while (SDL_PollEvent(&event)) {
+        // Pocket mode: drain events without processing when screen is off
+        if (screen_is_off()) continue;
+
         if (event.type == SDL_QUIT) {
             g_running = false;
             return;
@@ -495,12 +599,30 @@ static void handle_input(AppState *state) {
                                 *state = STATE_YOUTUBE_SEARCH;
                             }
                             break;
+                        case HOME_SPOTIFY:
+                            if (spotify_is_available()) {
+                                if (spotify_has_cached_credentials()) {
+                                    // Has cached auth - start librespot and go to search
+                                    spotify_start_connect();
+                                    spsearch_init();
+                                    *state = STATE_SPOTIFY_CONNECT;
+                                } else {
+                                    // No cached auth - go to Connect screen
+                                    spotify_start_connect();
+                                    *state = STATE_SPOTIFY_CONNECT;
+                                }
+                            }
+                            break;
                     }
                     break;
                 case INPUT_MENU:
                     g_menu_return_state = STATE_HOME;
                     menu_open(MENU_MODE_BROWSER);
                     *state = STATE_MENU;
+                    break;
+                case INPUT_HELP:
+                    g_prev_state = STATE_HOME;
+                    *state = STATE_HELP_BROWSER;
                     break;
                 default:
                     break;
@@ -915,6 +1037,9 @@ static void handle_input(AppState *state) {
                         if (result == MENU_RESULT_EQUALIZER) {
                             g_eq_band = 0;  // Start on Bass
                             *state = STATE_EQUALIZER;
+                        } else if (result == MENU_RESULT_UPDATE) {
+                            update_check();  // Start check
+                            *state = STATE_UPDATE;
                         } else if (result == MENU_RESULT_CLOSE) {
                             *state = g_menu_return_state;
                         }
@@ -1200,6 +1325,142 @@ static void handle_input(AppState *state) {
             case STATE_SEEKING:
                 // No input during seek - wait for update() to complete
                 break;
+
+            // ============================================================
+            // Spotify States
+            // ============================================================
+
+            case STATE_SPOTIFY_CONNECT:
+                switch (action) {
+                    case INPUT_BACK:
+                        spotify_stop_connect();
+                        *state = STATE_HOME;
+                        break;
+                    case INPUT_SELECT:
+                        // Skip to search if already connected
+                        if (spotify_get_state() >= SP_STATE_CONNECTED) {
+                            spsearch_init();
+                            *state = STATE_SPOTIFY_SEARCH;
+                        }
+                        break;
+                    default:
+                        break;
+                }
+                break;
+
+            case STATE_SPOTIFY_SEARCH:
+                switch (action) {
+                    case INPUT_UP:
+                        spsearch_move_kbd(0, -1);
+                        break;
+                    case INPUT_DOWN:
+                        spsearch_move_kbd(0, 1);
+                        break;
+                    case INPUT_LEFT:
+                        spsearch_move_kbd(-1, 0);
+                        break;
+                    case INPUT_RIGHT:
+                        spsearch_move_kbd(1, 0);
+                        break;
+                    case INPUT_SELECT:
+                        spsearch_insert();
+                        break;
+                    case INPUT_FAVORITE:
+                    case INPUT_BACK:
+                        // Y or B = delete character (backspace)
+                        spsearch_delete();
+                        break;
+                    case INPUT_MENU:
+                        // Start = execute search
+                        if (spsearch_execute_search()) {
+                            // State will change to SEARCHING in update()
+                        }
+                        break;
+                    case INPUT_SHUFFLE:
+                        // Select = cancel, go back to connect
+                        *state = STATE_SPOTIFY_CONNECT;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+
+            case STATE_SPOTIFY_RESULTS:
+                switch (action) {
+                    case INPUT_UP:
+                        spsearch_move_results_cursor(-1);
+                        break;
+                    case INPUT_DOWN:
+                        spsearch_move_results_cursor(1);
+                        break;
+                    case INPUT_SELECT: {
+                        // Play selected track
+                        const SpotifyTrack *track = spsearch_get_result(spsearch_get_results_cursor());
+                        if (track) {
+                            spotify_play_track(track->uri);
+                            *state = STATE_SPOTIFY_PLAYING;
+                        }
+                        break;
+                    }
+                    case INPUT_BACK:
+                        spsearch_set_state(SPSEARCH_INPUT);
+                        *state = STATE_SPOTIFY_SEARCH;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+
+            case STATE_SPOTIFY_PLAYING:
+                switch (action) {
+                    case INPUT_SELECT:
+                        spotify_toggle_pause();
+                        break;
+                    case INPUT_BACK:
+                        spotify_stop_playback();
+                        sp_audio_stop();
+                        *state = STATE_SPOTIFY_RESULTS;
+                        break;
+                    case INPUT_UP:
+                        audio_set_volume(audio_get_volume() + 5);
+                        sysinfo_refresh_volume();
+                        break;
+                    case INPUT_DOWN:
+                        audio_set_volume(audio_get_volume() - 5);
+                        sysinfo_refresh_volume();
+                        break;
+                    default:
+                        break;
+                }
+                break;
+
+            case STATE_UPDATE: {
+                UpdateState upd_state = update_get_state();
+                switch (action) {
+                    case INPUT_SELECT:
+                        if (upd_state == UPDATE_AVAILABLE) {
+                            // A = Download
+                            update_download();
+                        } else if (upd_state == UPDATE_ERROR) {
+                            // A = Retry
+                            update_check();
+                        }
+                        break;
+                    case INPUT_BACK:
+                        if (upd_state == UPDATE_AVAILABLE ||
+                            upd_state == UPDATE_UP_TO_DATE ||
+                            upd_state == UPDATE_READY ||
+                            upd_state == UPDATE_ERROR) {
+                            // B = Close/Cancel
+                            update_reset();
+                            *state = g_menu_return_state;
+                        }
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            }
         }
     }
 }
@@ -1222,6 +1483,11 @@ static void update(AppState *state) {
             screen_off();
         } else if (!switch_on && screen_is_off()) {
             screen_on();
+        }
+
+        // Pocket mode: green heartbeat blink every 10s
+        if (screen_is_off()) {
+            screen_update_led_heartbeat(now);
         }
     }
 
@@ -1450,6 +1716,57 @@ static void update(AppState *state) {
         seek_delay_frames = 0;
     }
 
+    // Handle Spotify Connect (check if phone connected)
+    if (*state == STATE_SPOTIFY_CONNECT) {
+        if (spotify_check_connected()) {
+            // Phone connected! Authenticate API and go to search
+            spotify_api_authenticate();
+            spsearch_init();
+            *state = STATE_SPOTIFY_SEARCH;
+        }
+    }
+
+    // Handle Spotify search (blocking operation with loading indicator)
+    if (*state == STATE_SPOTIFY_SEARCH && spsearch_get_state() == SPSEARCH_SEARCHING) {
+        // Render "Searching..." before blocking call
+        ui_render_spotify_search();
+
+        if (spsearch_update_search()) {
+            if (spsearch_get_state() == SPSEARCH_RESULTS) {
+                *state = STATE_SPOTIFY_RESULTS;
+            }
+            // On error, stays in SPOTIFY_SEARCH
+        }
+    }
+
+    // Handle Spotify audio pipe (check for EOF / connection loss)
+    if (*state == STATE_SPOTIFY_PLAYING) {
+        if (sp_audio_is_eof()) {
+            printf("[MAIN] Spotify pipe EOF - track ended or connection lost\n");
+            sp_audio_reset();
+            *state = STATE_SPOTIFY_RESULTS;
+        }
+    }
+
+    // Handle self-update (blocking operations with UI updates)
+    if (*state == STATE_UPDATE) {
+        UpdateState upd_state = update_get_state();
+
+        if (upd_state == UPDATE_CHECKING) {
+            // Render UI before blocking check
+            ui_render_update();
+            if (update_check_complete()) {
+                // Check finished - state changed automatically
+            }
+        } else if (upd_state == UPDATE_DOWNLOADING) {
+            // Render UI before blocking download
+            ui_render_update();
+            if (update_download_complete()) {
+                // Download finished - state changed to READY or ERROR
+            }
+        }
+    }
+
     // Update audio position (for progress bar)
     audio_update();
 }
@@ -1522,6 +1839,21 @@ static void render(AppState *state) {
         case STATE_SEEKING:
             ui_render_loading("Seeking...");
             break;
+        case STATE_SPOTIFY_CONNECT:
+            ui_render_spotify_connect();
+            break;
+        case STATE_SPOTIFY_SEARCH:
+            ui_render_spotify_search();
+            break;
+        case STATE_SPOTIFY_RESULTS:
+            ui_render_spotify_results();
+            break;
+        case STATE_SPOTIFY_PLAYING:
+            ui_render_spotify_player();
+            break;
+        case STATE_UPDATE:
+            ui_render_update();
+            break;
         case STATE_ERROR:
             ui_render_error(g_error_message);
             break;
@@ -1584,6 +1916,12 @@ int main(int argc, char *argv[]) {
 
     // Initialize YouTube integration
     youtube_init();
+
+    // Initialize Spotify integration
+    spotify_init();
+
+    // Initialize self-update system
+    update_init();
 
     // Initialize background download queue
     dlqueue_init();

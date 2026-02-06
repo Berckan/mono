@@ -25,6 +25,8 @@ static Mix_Music *g_music = NULL;
 static TrackInfo g_track_info;
 static bool g_is_paused = false;
 static int g_volume = 80;  // Default 80%
+static bool g_using_bluetooth = false;  // Track if using bluealsa output
+static char g_bluealsa_control[64] = {0};  // Bluealsa mixer control name (e.g. "WH-1000XM5 A2DP")
 
 // Track start time for position calculation
 static Uint32 g_start_time = 0;
@@ -932,10 +934,53 @@ void audio_set_volume(int volume) {
     if (volume > 100) volume = 100;
     g_volume = volume;
     Mix_VolumeMusic((int)(g_volume * 1.28));
+
+    // Sync volume with bluealsa when using Bluetooth audio
+#ifdef __linux__
+    if (g_using_bluetooth && g_bluealsa_control[0]) {
+        char cmd[256];
+        snprintf(cmd, sizeof(cmd), "amixer -D bluealsa set '%s' %d%% 2>/dev/null",
+                 g_bluealsa_control, volume);
+        system(cmd);
+    }
+#endif
 }
 
 int audio_get_volume(void) {
     return g_volume;
+}
+
+void audio_set_bluetooth_mode(bool enabled) {
+    g_using_bluetooth = enabled;
+    g_bluealsa_control[0] = '\0';
+
+    if (enabled) {
+#ifdef __linux__
+        // Get the bluealsa control name (e.g. "WH-1000XM5 A2DP")
+        // Format: Simple mixer control 'NAME',0
+        FILE *fp = popen("amixer -D bluealsa scontrols 2>/dev/null | head -1", "r");
+        if (fp) {
+            char buf[128];
+            if (fgets(buf, sizeof(buf), fp)) {
+                // Extract name between quotes
+                char *start = strchr(buf, '\'');
+                if (start) {
+                    start++;
+                    char *end = strchr(start, '\'');
+                    if (end) {
+                        size_t len = end - start;
+                        if (len < sizeof(g_bluealsa_control)) {
+                            strncpy(g_bluealsa_control, start, len);
+                            g_bluealsa_control[len] = '\0';
+                        }
+                    }
+                }
+            }
+            pclose(fp);
+        }
+#endif
+        printf("[AUDIO] Bluetooth mode enabled, control='%s'\n", g_bluealsa_control);
+    }
 }
 
 void audio_update(void) {
@@ -1008,6 +1053,24 @@ const int16_t* audio_get_pcm_data(size_t *sample_count, int *channels, int *samp
 
 bool audio_has_pcm_data(void) {
     return false;
+}
+
+const char* audio_format_from_path(const char *path) {
+    if (!path || !path[0]) return "";
+    const char *ext = strrchr(path, '.');
+    if (!ext) return "";
+    if (strcasecmp(ext, ".mp3") == 0)  return "MP3";
+    if (strcasecmp(ext, ".flac") == 0) return "FLAC";
+    if (strcasecmp(ext, ".ogg") == 0)  return "OGG";
+    if (strcasecmp(ext, ".wav") == 0)  return "WAV";
+    if (strcasecmp(ext, ".m4a") == 0)  return "M4A";
+    if (strcasecmp(ext, ".webm") == 0) return "WEBM";
+    if (strcasecmp(ext, ".opus") == 0) return "OPUS";
+    return "";
+}
+
+const char* audio_get_format_string(void) {
+    return audio_format_from_path(g_current_path);
 }
 
 bool audio_is_flac(void) {

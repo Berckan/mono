@@ -20,6 +20,11 @@
 #include "youtube.h"
 #include "download_queue.h"
 #include "equalizer.h"
+#include "spotify.h"
+#include "spsearch.h"
+#include "spotify_audio.h"
+#include "update.h"
+#include "version.h"
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
 #include <stdio.h>
@@ -38,6 +43,8 @@ static SDL_Renderer *g_renderer = NULL;
 static TTF_Font *g_font_large = NULL;   // 72px for titles
 static TTF_Font *g_font_medium = NULL;  // 48px for text
 static TTF_Font *g_font_small = NULL;   // 32px for details
+static TTF_Font *g_font_tiny = NULL;    // 16px for watermarks
+static TTF_Font *g_font_hint = NULL;    // 22px for footer hints
 
 // Theme color accessors (macros for cleaner code)
 #define COLOR_BG (theme_get_colors()->bg)
@@ -48,101 +55,105 @@ static TTF_Font *g_font_small = NULL;   // 32px for details
 #define COLOR_ERROR (theme_get_colors()->error)
 
 // Layout constants (compact for 720p)
-#define HEADER_HEIGHT 60
-#define FOOTER_HEIGHT 50
-#define MARGIN 20
+#define SCREEN_PAD 10      // Uniform padding from all screen edges
+#define HEADER_HEIGHT 66
+#define FOOTER_HEIGHT 52
+#define MARGIN SCREEN_PAD
 #define LINE_HEIGHT 60
 
 // Number of visible items in browser list
 #define VISIBLE_ITEMS 9
 
-// Dancing monkey animation (16x16 pixels, 4 frames)
-// 0 = transparent, 1 = brown (fur), 2 = beige (face/belly), 3 = black (eyes/nose/mouth)
-// Cute monkey inspired by classic pixel art style
-static const uint8_t MONKEY_FRAMES[4][16][16] = {
-    // Frame 0: Standing, arms down
+// Button labels (keyboard letters on macOS, gamepad on device)
+#ifdef __APPLE__
+#define BTN_A "Z"
+#define BTN_B "X"
+#define BTN_X "H"
+#define BTN_Y "F"
+#define BTN_START "Enter"
+#define BTN_SELECT "Shift"
+#else
+#define BTN_A "A"
+#define BTN_B "B"
+#define BTN_X "X"
+#define BTN_Y "Y"
+#define BTN_START "Start"
+#define BTN_SELECT "Select"
+#endif
+
+// Dancing monkey animation (16x16 pixels, 3 frames)
+// 0 = transparent, 1 = brown (fur), 2 = beige (face/belly), 3 = black (eyes), 4 = yellow (banana)
+// Monkey with banana, classic pixel art style
+static const uint8_t MONKEY_FRAMES[3][16][16] = {
+    // Frame 0: Right arm raised, waving
     {
-        {0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0},
+        {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
+        {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
+        {0,0,0,0,1,1,1,1,1,1,1,1,0,0,0,0},
         {0,0,0,1,1,1,1,1,1,1,1,1,1,0,0,0},
-        {0,0,1,1,1,2,2,2,2,2,1,1,1,0,0,0},
-        {0,1,1,1,2,2,2,2,2,2,2,1,1,1,0,0},
-        {0,1,1,2,2,3,2,2,2,3,2,2,1,1,0,0},
-        {0,1,1,2,2,3,2,2,2,3,2,2,1,1,0,0},
-        {0,1,1,2,2,2,2,3,2,2,2,2,1,1,0,0},
-        {0,0,1,1,2,2,3,3,3,2,2,1,1,0,0,0},
-        {0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0},
-        {0,0,1,1,0,1,2,2,2,1,0,1,1,0,0,0},
-        {0,0,1,1,0,1,2,2,2,1,0,1,1,0,0,0},
-        {0,0,0,0,0,1,2,2,2,1,0,0,0,1,0,0},
-        {0,0,0,0,0,1,1,0,1,1,0,0,1,1,0,0},
-        {0,0,0,0,0,1,1,0,1,1,0,1,1,0,0,0},
-        {0,0,0,0,1,1,0,0,0,1,1,1,0,0,0,0},
+        {0,0,0,1,1,2,3,2,2,3,2,1,1,2,0,0},
+        {0,0,0,1,1,2,2,2,2,2,2,1,1,1,0,0},
+        {0,0,0,0,1,2,2,2,2,2,2,1,1,0,0,0},
+        {0,0,0,0,1,1,2,2,2,2,1,1,0,0,0,0},
+        {0,0,0,1,1,1,2,2,2,2,1,1,1,0,0,0},
+        {0,0,0,0,1,1,2,2,2,2,1,1,0,0,0,0},
+        {0,0,0,1,1,1,2,4,2,2,1,1,0,0,0,0},
+        {0,0,0,1,1,1,4,1,1,1,1,1,0,0,0,0},
+        {0,0,0,1,1,4,1,1,1,1,1,0,0,0,0,0},
+        {0,0,0,0,0,1,0,0,0,0,1,0,0,0,0,0},
+        {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
         {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
     },
-    // Frame 1: Left arm up, dancing
+    // Frame 1: Arms down, resting pose
     {
-        {0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0},
+        {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
+        {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
+        {0,0,0,0,1,1,1,1,1,1,1,1,0,0,0,0},
         {0,0,0,1,1,1,1,1,1,1,1,1,1,0,0,0},
-        {0,0,1,1,1,2,2,2,2,2,1,1,1,0,0,0},
-        {0,1,1,1,2,2,2,2,2,2,2,1,1,1,0,0},
-        {0,1,1,2,2,3,2,2,2,3,2,2,1,1,0,0},
-        {0,1,1,2,2,3,2,2,2,3,2,2,1,1,0,0},
-        {0,1,1,2,2,2,2,3,2,2,2,2,1,1,0,0},
-        {0,0,1,1,2,2,3,3,3,2,2,1,1,0,0,0},
-        {0,1,1,1,1,1,1,1,1,1,1,1,0,0,0,0},
-        {1,1,0,0,0,1,2,2,2,1,0,1,1,0,0,0},
-        {0,0,0,0,0,1,2,2,2,1,0,1,1,0,0,0},
-        {0,0,0,0,0,1,2,2,2,1,0,0,0,0,1,0},
-        {0,0,0,0,0,1,1,0,1,1,0,0,0,1,1,0},
-        {0,0,0,0,0,1,1,0,1,1,0,0,1,1,0,0},
-        {0,0,0,0,1,1,0,0,0,1,1,1,0,0,0,0},
+        {0,0,0,1,1,2,3,2,2,3,2,1,1,0,0,0},
+        {0,0,0,1,1,2,2,2,2,2,2,1,1,0,0,0},
+        {0,0,0,0,1,2,2,2,2,2,2,1,0,0,0,0},
+        {0,0,0,0,1,1,2,2,2,2,1,1,0,0,0,0},
+        {0,0,0,1,1,1,2,2,2,2,1,1,1,0,0,0},
+        {0,0,0,0,1,1,2,2,2,2,1,1,0,2,0,0},
+        {0,0,0,1,1,1,2,4,2,2,1,1,1,1,0,0},
+        {0,0,0,1,1,1,4,1,1,1,1,1,0,0,0,0},
+        {0,0,0,1,1,4,1,1,1,1,1,0,0,0,0,0},
+        {0,0,0,0,0,1,0,0,0,0,1,0,0,0,0,0},
+        {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
         {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
     },
-    // Frame 2: Both arms up, happy!
+    // Frame 2: Both arms extended
     {
-        {0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0},
+        {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
+        {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
+        {0,0,0,0,1,1,1,1,1,1,1,1,0,0,0,0},
         {0,0,0,1,1,1,1,1,1,1,1,1,1,0,0,0},
-        {0,0,1,1,1,2,2,2,2,2,1,1,1,0,0,0},
-        {0,1,1,1,2,2,2,2,2,2,2,1,1,1,0,0},
-        {0,1,1,2,2,3,2,2,2,3,2,2,1,1,0,0},
-        {0,1,1,2,2,3,2,2,2,3,2,2,1,1,0,0},
-        {0,1,1,2,2,2,3,3,3,2,2,2,1,1,0,0},
-        {0,0,1,1,2,2,2,3,2,2,2,1,1,0,0,0},
-        {0,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0},
-        {1,1,0,0,0,1,2,2,2,1,0,0,0,1,1,0},
-        {0,0,0,0,0,1,2,2,2,1,0,0,0,0,0,0},
-        {0,0,0,0,0,1,2,2,2,1,0,0,0,1,0,0},
-        {0,0,0,0,0,1,1,0,1,1,0,0,1,0,0,0},
-        {0,0,0,0,0,1,1,0,1,1,0,0,1,0,0,0},
-        {0,0,0,0,1,1,0,0,0,1,1,0,0,1,0,0},
-        {0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0},
-    },
-    // Frame 3: Right arm up, dancing
-    {
+        {0,0,0,1,1,2,3,2,2,3,2,1,1,0,0,0},
+        {0,0,0,1,1,2,2,2,2,2,2,1,1,0,0,0},
+        {0,0,0,0,1,2,2,2,2,2,2,1,0,0,0,0},
+        {0,0,0,0,1,1,2,2,2,2,1,1,0,0,0,0},
+        {0,0,1,1,1,1,2,2,2,2,1,1,1,1,0,0},
+        {0,2,0,0,1,1,2,2,2,2,1,1,0,0,2,0},
+        {0,0,0,0,1,1,2,2,2,2,1,1,0,0,0,0},
+        {0,0,0,0,1,1,1,1,1,1,1,1,0,0,0,0},
         {0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0},
-        {0,0,0,1,1,1,1,1,1,1,1,1,1,0,0,0},
-        {0,0,1,1,1,2,2,2,2,2,1,1,1,0,0,0},
-        {0,1,1,1,2,2,2,2,2,2,2,1,1,1,0,0},
-        {0,1,1,2,2,3,2,2,2,3,2,2,1,1,0,0},
-        {0,1,1,2,2,3,2,2,2,3,2,2,1,1,0,0},
-        {0,1,1,2,2,2,2,3,2,2,2,2,1,1,0,0},
-        {0,0,1,1,2,2,3,3,3,2,2,1,1,1,1,0},
-        {0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,0},
-        {0,0,1,1,0,1,2,2,2,1,0,0,0,0,0,0},
-        {0,0,1,1,0,1,2,2,2,1,0,0,0,0,0,0},
-        {0,1,0,0,0,1,2,2,2,1,0,0,0,0,0,0},
-        {0,1,1,0,0,1,1,0,1,1,0,0,0,0,0,0},
-        {0,0,1,1,0,1,1,0,1,1,0,0,0,0,0,0},
-        {0,0,0,1,1,1,0,0,0,1,1,0,0,0,0,0},
+        {0,0,0,0,0,1,0,0,0,0,1,0,0,0,0,0},
+        {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
         {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
     },
 };
 
 // Animation state
 static int g_monkey_frame = 0;
+static int g_monkey_seq = 0;
 static Uint32 g_monkey_last_update = 0;
 #define MONKEY_FRAME_MS 200  // ms per frame
 #define MONKEY_PIXEL_SIZE 3  // scale factor
+
+// Dance sequence: arm up → arms down → arm up → T-pose → repeat
+static const int MONKEY_DANCE_SEQ[] = {0, 1, 0, 2};
+#define MONKEY_DANCE_LEN 4
 
 // Toast notification state
 static char g_toast_message[128] = {0};
@@ -159,13 +170,19 @@ static char g_player_last_title[256] = {0};  // Detect song change
 #define PLAYER_SCROLL_PAUSE_MS 2000     // Pause at start/end
 #define PLAYER_SCROLL_GAP "   •   "     // Visual separator between repetitions
 
-// Forward declaration for toast rendering
+// Forward declarations for overlays
 static void render_toast_overlay(void);
+static void render_version_watermark(void);
 
-// Monkey colors
-static const SDL_Color COLOR_MONKEY_BROWN = {139, 90, 43, 255};   // Brown fur
-static const SDL_Color COLOR_MONKEY_BEIGE = {222, 184, 135, 255}; // Beige face/belly
-static const SDL_Color COLOR_MONKEY_BLACK = {30, 30, 30, 255};    // Black eyes/nose
+// Monkey color palette (indexed by pixel values in MONKEY_FRAMES)
+// 0 = transparent (not rendered)
+static const SDL_Color MONKEY_PALETTE[] = {
+    {  0,   0,   0,   0},  // 0: transparent (unused, skip in render)
+    {139,  69,  19, 255},  // 1: brown - fur (#8B4513)
+    {210, 180, 140, 255},  // 2: beige - face/belly (#D2B48C)
+    {  0,   0,   0, 255},  // 3: black - eyes (#000000)
+    {255, 215,   0, 255},  // 4: yellow - banana (#FFD700)
+};
 
 // ============================================================================
 // TEXT CACHING SYSTEM
@@ -313,11 +330,13 @@ static void render_monkey(int x, int y, bool is_playing) {
     // Update animation frame if playing
     if (is_playing) {
         if (now - g_monkey_last_update > MONKEY_FRAME_MS) {
-            g_monkey_frame = (g_monkey_frame + 1) % 4;
+            g_monkey_seq = (g_monkey_seq + 1) % MONKEY_DANCE_LEN;
+            g_monkey_frame = MONKEY_DANCE_SEQ[g_monkey_seq];
             g_monkey_last_update = now;
         }
     } else {
-        g_monkey_frame = 0;  // Static pose when not playing
+        g_monkey_frame = 1;  // Resting pose (arms down) when not playing
+        g_monkey_seq = 0;
     }
 
     const uint8_t (*frame)[16] = MONKEY_FRAMES[g_monkey_frame];
@@ -327,13 +346,7 @@ static void render_monkey(int x, int y, bool is_playing) {
             uint8_t pixel = frame[py][px];
             if (pixel == 0) continue;  // Transparent
 
-            SDL_Color color;
-            switch (pixel) {
-                case 1: color = COLOR_MONKEY_BROWN; break;  // Fur
-                case 2: color = COLOR_MONKEY_BEIGE; break;  // Face/belly
-                case 3: color = COLOR_MONKEY_BLACK; break;  // Eyes/nose/mouth
-                default: continue;
-            }
+            SDL_Color color = MONKEY_PALETTE[pixel];
 
             SDL_SetRenderDrawColor(g_renderer, color.r, color.g, color.b, 255);
             SDL_Rect rect = {
@@ -345,6 +358,80 @@ static void render_monkey(int x, int y, bool is_playing) {
             SDL_RenderFillRect(g_renderer, &rect);
         }
     }
+}
+
+// Forward declaration for render_text_shadow (calls render_text)
+static void render_text_shadow(const char *text, int x, int y, TTF_Font *font, SDL_Color color);
+
+/**
+ * Render text to screen (cached version)
+ * Uses LRU text cache to avoid repeated TTF rendering
+ */
+static void render_text(const char *text, int x, int y, TTF_Font *font, SDL_Color color) {
+    if (!text || !text[0]) return;
+
+    int w, h;
+    SDL_Texture *texture = text_cache_get(text, font, color, &w, &h);
+    if (texture) {
+        SDL_Rect dest = {x, y, w, h};
+        SDL_RenderCopy(g_renderer, texture, NULL, &dest);
+    }
+}
+
+/**
+ * Render text with shadow (for cover background readability)
+ */
+static void render_text_shadow(const char *text, int x, int y, TTF_Font *font, SDL_Color color) {
+    if (!text || !text[0]) return;
+
+    SDL_Color shadow = {0, 0, 0, 180};
+
+    SDL_Surface *shadow_surface = TTF_RenderUTF8_Blended(font, text, shadow);
+    if (shadow_surface) {
+        SDL_Texture *shadow_tex = SDL_CreateTextureFromSurface(g_renderer, shadow_surface);
+        if (shadow_tex) {
+            SDL_SetTextureBlendMode(shadow_tex, SDL_BLENDMODE_BLEND);
+            SDL_Rect dest1 = {x + 1, y + 1, shadow_surface->w, shadow_surface->h};
+            SDL_Rect dest2 = {x + 2, y + 2, shadow_surface->w, shadow_surface->h};
+            SDL_SetTextureAlphaMod(shadow_tex, 100);
+            SDL_RenderCopy(g_renderer, shadow_tex, NULL, &dest2);
+            SDL_SetTextureAlphaMod(shadow_tex, 150);
+            SDL_RenderCopy(g_renderer, shadow_tex, NULL, &dest1);
+            SDL_DestroyTexture(shadow_tex);
+        }
+        SDL_FreeSurface(shadow_surface);
+    }
+
+    render_text(text, x, y, font, color);
+}
+
+/**
+ * Render screen header: title text + monkey at end of text
+ */
+static void render_header(const char *title, SDL_Color color, bool animate_monkey) {
+    render_text(title, SCREEN_PAD, SCREEN_PAD, g_font_medium, color);
+    int text_w;
+    TTF_SizeUTF8(g_font_medium, title, &text_w, NULL);
+    render_monkey(SCREEN_PAD + text_w + 8, SCREEN_PAD - 2, animate_monkey);
+}
+
+/**
+ * Render screen header with shadow: title text + monkey at end of text
+ */
+static void render_header_shadow(const char *title, SDL_Color color, bool animate_monkey) {
+    render_text_shadow(title, SCREEN_PAD, SCREEN_PAD, g_font_medium, color);
+    int text_w;
+    TTF_SizeUTF8(g_font_medium, title, &text_w, NULL);
+    render_monkey(SCREEN_PAD + text_w + 8, SCREEN_PAD - 2, animate_monkey);
+}
+
+/**
+ * Get the width of the header (title + monkey) for positioning elements after it
+ */
+static int get_header_end_x(const char *title) {
+    int text_w;
+    TTF_SizeUTF8(g_font_medium, title, &text_w, NULL);
+    return SCREEN_PAD + text_w + 8 + (16 * MONKEY_PIXEL_SIZE) + 8;
 }
 
 /**
@@ -388,8 +475,10 @@ static int load_fonts(void) {
     g_font_large = TTF_OpenFont(found_path, 72);
     g_font_medium = TTF_OpenFont(found_path, 48);
     g_font_small = TTF_OpenFont(found_path, 32);
+    g_font_tiny = TTF_OpenFont(found_path, 16);
+    g_font_hint = TTF_OpenFont(found_path, 22);
 
-    if (!g_font_large || !g_font_medium || !g_font_small) {
+    if (!g_font_large || !g_font_medium || !g_font_small || !g_font_tiny || !g_font_hint) {
         fprintf(stderr, "Failed to load fonts: %s\n", TTF_GetError());
         return -1;
     }
@@ -401,52 +490,6 @@ static int load_fonts(void) {
     TTF_SetFontHinting(g_font_small, TTF_HINTING_NONE);
 
     return 0;
-}
-
-/**
- * Render text to screen (cached version)
- * Uses LRU text cache to avoid repeated TTF rendering
- */
-static void render_text(const char *text, int x, int y, TTF_Font *font, SDL_Color color) {
-    if (!text || !text[0]) return;
-
-    int w, h;
-    SDL_Texture *texture = text_cache_get(text, font, color, &w, &h);
-    if (texture) {
-        SDL_Rect dest = {x, y, w, h};
-        SDL_RenderCopy(g_renderer, texture, NULL, &dest);
-    }
-}
-
-/**
- * Render text with shadow (for cover background readability)
- */
-static void render_text_shadow(const char *text, int x, int y, TTF_Font *font, SDL_Color color) {
-    if (!text || !text[0]) return;
-
-    // Shadow color (black with transparency for soft effect)
-    SDL_Color shadow = {0, 0, 0, 180};
-
-    // Render shadow (offset by 2px, with blur effect using multiple passes)
-    SDL_Surface *shadow_surface = TTF_RenderUTF8_Blended(font, text, shadow);
-    if (shadow_surface) {
-        SDL_Texture *shadow_tex = SDL_CreateTextureFromSurface(g_renderer, shadow_surface);
-        if (shadow_tex) {
-            SDL_SetTextureBlendMode(shadow_tex, SDL_BLENDMODE_BLEND);
-            // Multiple shadow passes for blur effect
-            SDL_Rect dest1 = {x + 1, y + 1, shadow_surface->w, shadow_surface->h};
-            SDL_Rect dest2 = {x + 2, y + 2, shadow_surface->w, shadow_surface->h};
-            SDL_SetTextureAlphaMod(shadow_tex, 100);
-            SDL_RenderCopy(g_renderer, shadow_tex, NULL, &dest2);
-            SDL_SetTextureAlphaMod(shadow_tex, 150);
-            SDL_RenderCopy(g_renderer, shadow_tex, NULL, &dest1);
-            SDL_DestroyTexture(shadow_tex);
-        }
-        SDL_FreeSurface(shadow_surface);
-    }
-
-    // Render main text
-    render_text(text, x, y, font, color);
 }
 
 /**
@@ -627,9 +670,9 @@ static void render_play_pause_icon(int center_x, int y, bool is_playing) {
  * Call this from both browser and player renders
  */
 static void render_status_bar(void) {
-    int text_y = 16;  // Vertical position for text
-    int batt_y = 31;  // Battery icon vertically centered with text
-    int right_margin = 20;  // Keep away from screen edge
+    int text_y = SCREEN_PAD;  // Vertical position for text
+    int batt_y = SCREEN_PAD + 15;  // Battery icon vertically centered with text
+    int right_margin = SCREEN_PAD;  // Keep away from screen edge
 
     // Battery indicator (rightmost)
     int batt_pct = sysinfo_get_battery_percent();
@@ -730,6 +773,8 @@ void ui_cleanup(void) {
     if (g_font_large) TTF_CloseFont(g_font_large);
     if (g_font_medium) TTF_CloseFont(g_font_medium);
     if (g_font_small) TTF_CloseFont(g_font_small);
+    if (g_font_tiny) TTF_CloseFont(g_font_tiny);
+    if (g_font_hint) TTF_CloseFont(g_font_hint);
     if (g_renderer) SDL_DestroyRenderer(g_renderer);
     if (g_window) SDL_DestroyWindow(g_window);
 }
@@ -750,7 +795,7 @@ void ui_render_home(void) {
     SDL_RenderClear(g_renderer);
 
     // Header
-    render_text("> Mono", MARGIN, 8, g_font_medium, COLOR_TEXT);
+    render_header("> Home", COLOR_TEXT, false);
 
     // Status bar (volume + battery) in top right
     render_status_bar();
@@ -766,24 +811,27 @@ void ui_render_home(void) {
     // Menu items layout - responsive to screen height
     // Available space: between header (60) and footer (50)
     int content_height = g_screen_height - HEADER_HEIGHT - FOOTER_HEIGHT;
-    int menu_start_y = HEADER_HEIGHT + content_height / 8;  // Start ~1/8 down (higher for 4 items)
-    int item_height = content_height / 6;  // Each item takes ~1/6 of space (smaller for 4 items)
+    int menu_count = 5;
+    int menu_start_y = HEADER_HEIGHT + content_height / 10;
+    int item_height = content_height / 7;  // Each item takes ~1/7 of space (5 items)
     int box_width = g_screen_width / 3;  // 1/3 of screen width
-    int box_height = item_height - 16;  // Leave some padding
+    int box_height = item_height - 12;  // Leave some padding
     int box_x = (g_screen_width - box_width) / 2;
 
-    // Menu items (4 options now)
-    const char *labels[] = {"Resume", "Browse", "Favorites", "YouTube"};
-    int counts[] = {resume_count, -1, favorites_count, -1};  // -1 means no count shown
+    // Menu items (5 options)
+    const char *labels[] = {"Resume", "Browse", "Favorites", "YouTube", "Spotify (Soon)"};
+    int counts[] = {resume_count, -1, favorites_count, -1, -1};  // -1 means no count shown
     bool yt_available = youtube_is_available();
+    bool sp_available = false;  // Disabled until Spotify Developer API reopens
 
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < menu_count; i++) {
         int y = menu_start_y + i * item_height;
         bool is_selected = (i == cursor);
-        // Resume/Favorites disabled if empty, YouTube disabled if unavailable
+        // Resume/Favorites disabled if empty, YouTube/Spotify disabled if unavailable
         bool is_disabled = (i == 0 && resume_count == 0) ||
                           (i == 2 && favorites_count == 0) ||
-                          (i == 3 && !yt_available);
+                          (i == 3 && !yt_available) ||
+                          (i == 4 && !sp_available);
 
         // Selection box
         if (is_selected) {
@@ -801,16 +849,18 @@ void ui_render_home(void) {
         }
 
         SDL_Color color = is_disabled ? COLOR_DIM : (is_selected ? COLOR_ACCENT : COLOR_TEXT);
-        render_text_centered(display, y + (box_height / 2) - 20, g_font_medium, color);
+        int text_h;
+        TTF_SizeUTF8(g_font_medium, display, NULL, &text_h);
+        render_text_centered(display, y + (box_height - text_h) / 2, g_font_medium, color);
     }
 
     // Dancing monkey below menu items
-    int monkey_y = menu_start_y + 4 * item_height + 10;
-    render_monkey(g_screen_width / 2 - 48, monkey_y, false);
-
     // Footer controls
-    render_text("A: Select   Start: Options", MARGIN, g_screen_height - 40, g_font_small, COLOR_DIM);
+    char home_hint[96];
+    snprintf(home_hint, sizeof(home_hint), "%s: Select   %s: Options   %s: Help", BTN_A, BTN_START, BTN_X);
+    render_text(home_hint, MARGIN, g_screen_height - SCREEN_PAD - 22, g_font_hint, COLOR_DIM);
 
+    render_version_watermark();
     SDL_RenderPresent(g_renderer);
 }
 
@@ -820,7 +870,7 @@ void ui_render_resume(void) {
     SDL_RenderClear(g_renderer);
 
     // Header
-    render_text("> Resume", MARGIN, 8, g_font_medium, COLOR_TEXT);
+    render_header("> Resume", COLOR_TEXT, false);
 
     // Status bar (volume + battery) in top right
     render_status_bar();
@@ -888,12 +938,13 @@ void ui_render_resume(void) {
 
         char scroll_info[32];
         snprintf(scroll_info, sizeof(scroll_info), "%d/%d", cursor + 1, count);
-        render_text(scroll_info, g_screen_width - 120 - 20, g_screen_height - 40, g_font_small, COLOR_DIM);
+        render_text(scroll_info, g_screen_width - 120 - SCREEN_PAD, g_screen_height - SCREEN_PAD - 22, g_font_hint, COLOR_DIM);
     }
 
     // Controls hint
-    render_text("A:Play  Y:Remove  B:Back", MARGIN, g_screen_height - 40, g_font_small, COLOR_DIM);
+    render_text(BTN_A ":Play  " BTN_Y ":Remove  " BTN_B ":Back", MARGIN, g_screen_height - SCREEN_PAD - 22, g_font_hint, COLOR_DIM);
 
+    render_version_watermark();
     SDL_RenderPresent(g_renderer);
 }
 
@@ -903,7 +954,7 @@ void ui_render_favorites(void) {
     SDL_RenderClear(g_renderer);
 
     // Header
-    render_text("> Favorites", MARGIN, 8, g_font_medium, COLOR_TEXT);
+    render_header("> Favorites", COLOR_TEXT, false);
 
     // Status bar (volume + battery) in top right
     render_status_bar();
@@ -971,12 +1022,13 @@ void ui_render_favorites(void) {
 
         char scroll_info[32];
         snprintf(scroll_info, sizeof(scroll_info), "%d/%d", cursor + 1, count);
-        render_text(scroll_info, g_screen_width - 120 - 20, g_screen_height - 40, g_font_small, COLOR_DIM);
+        render_text(scroll_info, g_screen_width - 120 - SCREEN_PAD, g_screen_height - SCREEN_PAD - 22, g_font_hint, COLOR_DIM);
     }
 
     // Controls hint
-    render_text("A:Play  Y:Remove  B:Back", MARGIN, g_screen_height - 40, g_font_small, COLOR_DIM);
+    render_text(BTN_A ":Play  " BTN_Y ":Remove  " BTN_B ":Back", MARGIN, g_screen_height - SCREEN_PAD - 22, g_font_hint, COLOR_DIM);
 
+    render_version_watermark();
     SDL_RenderPresent(g_renderer);
 }
 
@@ -994,9 +1046,9 @@ void ui_render_browser(void) {
     SDL_RenderClear(g_renderer);
 
     // Header
-    render_text("> Mono", MARGIN, 8, g_font_medium, COLOR_TEXT);
+    render_header("> Explorer", COLOR_TEXT, false);
 
-    // Download indicator (next to MONO, grows right)
+    // Download indicator (next to header, grows right)
     int pending = dlqueue_pending_count();
     if (pending > 0) {
         char dl_str[32];
@@ -1006,7 +1058,7 @@ void ui_render_browser(void) {
         } else {
             snprintf(dl_str, sizeof(dl_str), "DL:(%d)", pending);
         }
-        render_text(dl_str, MARGIN + 250, 16, g_font_small, COLOR_ACCENT);
+        render_text(dl_str, get_header_end_x("> Explorer") + 4, 16, g_font_small, COLOR_ACCENT);
     }
 
     // Status bar (volume + battery) in top right
@@ -1069,6 +1121,16 @@ void ui_render_browser(void) {
         }
         render_text_truncated(display, MARGIN, y, max_width, g_font_medium, color);
 
+        // Format indicator (right-aligned, files only)
+        if (entry->type == ENTRY_FILE) {
+            const char *fmt = audio_format_from_path(entry->full_path);
+            if (fmt[0]) {
+                int fmt_w;
+                TTF_SizeUTF8(g_font_small, fmt, &fmt_w, NULL);
+                render_text(fmt, g_screen_width - MARGIN * 2 - fmt_w, y + 4, g_font_small, COLOR_DIM);
+            }
+        }
+
         y += LINE_HEIGHT;
     }
 
@@ -1078,7 +1140,7 @@ void ui_render_browser(void) {
 
         char scroll_info[32];
         snprintf(scroll_info, sizeof(scroll_info), "%d/%d", cursor + 1, count);
-        render_text(scroll_info, g_screen_width - 120 - 20, g_screen_height - 40, g_font_small, COLOR_DIM);
+        render_text(scroll_info, g_screen_width - 120 - SCREEN_PAD, g_screen_height - SCREEN_PAD - 22, g_font_hint, COLOR_DIM);
     }
 
     // Empty directory message
@@ -1088,11 +1150,12 @@ void ui_render_browser(void) {
 
     // Controls hint
 #ifdef __APPLE__
-    render_text("A:Open  Y:Fav  B:Up  H:Help", MARGIN, g_screen_height - 40, g_font_small, COLOR_DIM);
+    render_text(BTN_A ":Open  " BTN_Y ":Fav  " BTN_B ":Up  H:Help", MARGIN, g_screen_height - SCREEN_PAD - 22, g_font_hint, COLOR_DIM);
 #else
-    render_text("A:Open  Y:Fav  B:Up  X:Help", MARGIN, g_screen_height - 40, g_font_small, COLOR_DIM);
+    render_text(BTN_A ":Open  " BTN_Y ":Fav  " BTN_B ":Up  " BTN_X ":Help", MARGIN, g_screen_height - SCREEN_PAD - 22, g_font_hint, COLOR_DIM);
 #endif
 
+    render_version_watermark();
     SDL_RenderPresent(g_renderer);
 }
 
@@ -1253,17 +1316,14 @@ static void ui_render_player_content(void) {
 
     // Header (with shadow when cover background)
     if (has_cover_bg) {
-        render_text_shadow("> Mono", MARGIN, 8, g_font_medium, cover_text);
+        render_header_shadow("> Player", cover_text, audio_is_playing());
     } else {
-        render_text("> Mono", MARGIN, 8, g_font_medium, COLOR_TEXT);
+        render_header("> Player", COLOR_TEXT, audio_is_playing());
     }
-
-    // Dancing monkey next to "Mono" (animates when playing)
-    render_monkey(160, 6, audio_is_playing());
 
     // Favorite indicator if current track is a favorite
     const char *current_path = browser_get_selected_path();
-    int fav_indicator_x = 220;
+    int fav_indicator_x = get_header_end_x("> Player");
     if (current_path && favorites_is_favorite(current_path)) {
         if (has_cover_bg) {
             render_text_shadow("*", fav_indicator_x, 8, g_font_medium, cover_accent);
@@ -1282,7 +1342,7 @@ static void ui_render_player_content(void) {
         }
     }
 
-    // Download indicator (next to MONO/monkey, grows right)
+    // Download indicator (next to header, grows right)
     int pending = dlqueue_pending_count();
     if (pending > 0) {
         char dl_str[32];
@@ -1292,11 +1352,11 @@ static void ui_render_player_content(void) {
         } else {
             snprintf(dl_str, sizeof(dl_str), "DL:(%d)", pending);
         }
-        // Position after favorite "*" (220) + padding
+        int dl_x = fav_indicator_x + 12;
         if (has_cover_bg) {
-            render_text_shadow(dl_str, 300, 16, g_font_small, cover_accent);
+            render_text_shadow(dl_str, dl_x, 16, g_font_small, cover_accent);
         } else {
-            render_text(dl_str, 300, 16, g_font_small, COLOR_ACCENT);
+            render_text(dl_str, dl_x, 16, g_font_small, COLOR_ACCENT);
         }
     }
 
@@ -1406,6 +1466,21 @@ static void ui_render_player_content(void) {
         render_text(time_str, (g_screen_width - tw) / 2, bar_y + 24, g_font_small, time_color);
     }
 
+    // Format badge (right-aligned on time line)
+    const char *fmt = audio_get_format_string();
+    if (fmt[0]) {
+        SDL_Color fmt_color = has_cover_bg ? cover_accent : COLOR_ACCENT;
+        int fmt_x = bar_x + bar_w;
+        int fmt_w;
+        TTF_SizeUTF8(g_font_small, fmt, &fmt_w, NULL);
+        fmt_x -= fmt_w;
+        if (has_cover_bg) {
+            render_text_shadow(fmt, fmt_x, bar_y + 24, g_font_small, fmt_color);
+        } else {
+            render_text(fmt, fmt_x, bar_y + 24, g_font_small, fmt_color);
+        }
+    }
+
     // Footer with controls (only separator line without cover bg)
     if (!has_cover_bg) {
         draw_rect(0, g_screen_height - FOOTER_HEIGHT, g_screen_width, 2, COLOR_DIM);
@@ -1413,35 +1488,36 @@ static void ui_render_player_content(void) {
 
     // Control icons (with shadow when cover background)
     // Equal spacing: 150px between each item
-    int ctrl_y = g_screen_height - 40;
+    int ctrl_y = g_screen_height - SCREEN_PAD - 32;
     int ctrl_spacing = 150;
     int ctrl_x = MARGIN;
     SDL_Color ctrl_color = has_cover_bg ? cover_text : COLOR_DIM;
     if (has_cover_bg) {
         render_text_shadow("L:Prev", ctrl_x, ctrl_y, g_font_small, ctrl_color);
-        render_text_shadow("A:Play", ctrl_x + ctrl_spacing, ctrl_y, g_font_small, ctrl_color);
+        render_text_shadow(BTN_A ":Play", ctrl_x + ctrl_spacing, ctrl_y, g_font_small, ctrl_color);
         render_text_shadow("R:Next", ctrl_x + ctrl_spacing * 2, ctrl_y, g_font_small, ctrl_color);
-        render_text_shadow("B:Back", ctrl_x + ctrl_spacing * 3, ctrl_y, g_font_small, ctrl_color);
+        render_text_shadow(BTN_B ":Back", ctrl_x + ctrl_spacing * 3, ctrl_y, g_font_small, ctrl_color);
 #ifdef __APPLE__
         render_text_shadow("H:Help", ctrl_x + ctrl_spacing * 4, ctrl_y, g_font_small, ctrl_color);
 #else
-        render_text_shadow("X:Help", ctrl_x + ctrl_spacing * 4, ctrl_y, g_font_small, ctrl_color);
+        render_text_shadow(BTN_X ":Help", ctrl_x + ctrl_spacing * 4, ctrl_y, g_font_small, ctrl_color);
 #endif
     } else {
         render_text("L:Prev", ctrl_x, ctrl_y, g_font_small, ctrl_color);
-        render_text("A:Play", ctrl_x + ctrl_spacing, ctrl_y, g_font_small, ctrl_color);
+        render_text(BTN_A ":Play", ctrl_x + ctrl_spacing, ctrl_y, g_font_small, ctrl_color);
         render_text("R:Next", ctrl_x + ctrl_spacing * 2, ctrl_y, g_font_small, ctrl_color);
-        render_text("B:Back", ctrl_x + ctrl_spacing * 3, ctrl_y, g_font_small, ctrl_color);
+        render_text(BTN_B ":Back", ctrl_x + ctrl_spacing * 3, ctrl_y, g_font_small, ctrl_color);
 #ifdef __APPLE__
         render_text("H:Help", ctrl_x + ctrl_spacing * 4, ctrl_y, g_font_small, ctrl_color);
 #else
-        render_text("X:Help", ctrl_x + ctrl_spacing * 4, ctrl_y, g_font_small, ctrl_color);
+        render_text(BTN_X ":Help", ctrl_x + ctrl_spacing * 4, ctrl_y, g_font_small, ctrl_color);
 #endif
     }
 }
 
 void ui_render_player(void) {
     ui_render_player_content();
+    render_version_watermark();
     SDL_RenderPresent(g_renderer);
 }
 
@@ -1495,8 +1571,9 @@ void ui_render_menu(void) {
     }
 
     // Controls hint
-    render_text_centered("A:Select  B:Close", menu_y + menu_h - 40, g_font_small, COLOR_DIM);
+    render_text_centered(BTN_A ":Select  " BTN_B ":Close", menu_y + menu_h - 40, g_font_small, COLOR_DIM);
 
+    render_version_watermark();
     SDL_RenderPresent(g_renderer);
 }
 
@@ -1514,95 +1591,102 @@ void ui_render_equalizer(void) {
     SDL_RenderFillRect(g_renderer, &overlay);
 
     // EQ box dimensions
-    int box_w = 700;
-    int box_h = 340;
+    int box_w = 740;
+    int box_h = 480;
     int box_x = (g_screen_width - box_w) / 2;
     int box_y = (g_screen_height - box_h) / 2;
 
     draw_retro_box(box_x, box_y, box_w, box_h, 4, COLOR_HIGHLIGHT, COLOR_TEXT);
 
     // Title
-    render_text_centered("Equalizer", box_y + 20, g_font_medium, COLOR_TEXT);
+    render_text_centered("Equalizer", box_y + 16, g_font_medium, COLOR_TEXT);
 
-    // Band layout
     int selected = eq_get_selected_band();
-    int bar_max_w = 400;
-    int bar_h = 28;
-    int label_x = box_x + 40;
-    int bar_x = box_x + 170;
-    int db_x = bar_x + bar_max_w + 16;
+    int band_count = eq_get_band_count();
 
-    // Bass band (y position)
-    int bass_y = box_y + 100;
-    int bass_db = eq_get_bass();
-    float bass_fill = (float)(bass_db + 12) / 24.0f;  // 0.0 to 1.0
-    int bass_fill_w = (int)(bass_fill * bar_max_w);
+    // Vertical bar layout - 5 columns evenly spaced
+    int bar_area_x = box_x + 60;
+    int bar_area_w = box_w - 120;
+    int col_w = bar_area_w / band_count;
+    int bar_w = 40;
+    int bar_max_h = 240;
+    int bar_top = box_y + 80;
+    int bar_center_y = bar_top + bar_max_h / 2;  // Zero line
 
-    SDL_Color bass_label_color = (selected == 0) ? COLOR_TEXT : COLOR_DIM;
-    SDL_Color bass_bar_color = (selected == 0) ? COLOR_ACCENT : COLOR_DIM;
+    for (int i = 0; i < band_count; i++) {
+        int cx = bar_area_x + col_w * i + col_w / 2;  // Column center x
+        int bx = cx - bar_w / 2;  // Bar left x
 
-    render_text("Bass", label_x, bass_y, g_font_small, bass_label_color);
+        int db = eq_get_band_db(i);
+        SDL_Color label_color = (i == selected) ? COLOR_TEXT : COLOR_DIM;
+        SDL_Color bar_color = (i == selected) ? COLOR_ACCENT : COLOR_DIM;
 
-    // Bar background (empty)
-    SDL_SetRenderDrawColor(g_renderer, COLOR_DIM.r, COLOR_DIM.g, COLOR_DIM.b, 80);
-    SDL_SetRenderDrawBlendMode(g_renderer, SDL_BLENDMODE_BLEND);
-    SDL_Rect bar_bg = {bar_x, bass_y + 4, bar_max_w, bar_h};
-    SDL_RenderFillRect(g_renderer, &bar_bg);
+        // Bar background (full height, dimmed)
+        SDL_SetRenderDrawColor(g_renderer, COLOR_DIM.r, COLOR_DIM.g, COLOR_DIM.b, 50);
+        SDL_SetRenderDrawBlendMode(g_renderer, SDL_BLENDMODE_BLEND);
+        SDL_Rect bar_bg = {bx, bar_top, bar_w, bar_max_h};
+        SDL_RenderFillRect(g_renderer, &bar_bg);
 
-    // Bar fill
-    if (bass_fill_w > 0) {
-        SDL_SetRenderDrawColor(g_renderer, bass_bar_color.r, bass_bar_color.g, bass_bar_color.b, 255);
-        SDL_SetRenderDrawBlendMode(g_renderer, SDL_BLENDMODE_NONE);
-        SDL_Rect bar_fill = {bar_x, bass_y + 4, bass_fill_w, bar_h};
-        SDL_RenderFillRect(g_renderer, &bar_fill);
+        // Zero line marker
+        SDL_SetRenderDrawColor(g_renderer, COLOR_DIM.r, COLOR_DIM.g, COLOR_DIM.b, 120);
+        SDL_RenderDrawLine(g_renderer, bx - 4, bar_center_y, bx + bar_w + 4, bar_center_y);
+
+        // Filled portion: grows up from center for positive, down for negative
+        if (db != 0) {
+            float ratio = (float)abs(db) / (float)(-EQ_MIN_DB);  // 0.0 to 1.0
+            int fill_h = (int)(ratio * (bar_max_h / 2));
+
+            SDL_SetRenderDrawColor(g_renderer, bar_color.r, bar_color.g, bar_color.b, 255);
+            SDL_SetRenderDrawBlendMode(g_renderer, SDL_BLENDMODE_NONE);
+
+            if (db > 0) {
+                // Grow upward from center
+                SDL_Rect fill = {bx, bar_center_y - fill_h, bar_w, fill_h};
+                SDL_RenderFillRect(g_renderer, &fill);
+            } else {
+                // Grow downward from center
+                SDL_Rect fill = {bx, bar_center_y, bar_w, fill_h};
+                SDL_RenderFillRect(g_renderer, &fill);
+            }
+        }
+
+        // Bar outline
+        SDL_SetRenderDrawColor(g_renderer, label_color.r, label_color.g, label_color.b,
+                              (i == selected) ? 255 : 100);
+        SDL_SetRenderDrawBlendMode(g_renderer, (i == selected) ? SDL_BLENDMODE_NONE : SDL_BLENDMODE_BLEND);
+        SDL_RenderDrawRect(g_renderer, &bar_bg);
+
+        // Selection indicator (triangle/arrow below bar)
+        if (i == selected) {
+            int ty = bar_top + bar_max_h + 8;
+            SDL_SetRenderDrawColor(g_renderer, COLOR_ACCENT.r, COLOR_ACCENT.g, COLOR_ACCENT.b, 255);
+            SDL_SetRenderDrawBlendMode(g_renderer, SDL_BLENDMODE_NONE);
+            // Small triangle pointing up
+            for (int row = 0; row < 6; row++) {
+                SDL_RenderDrawLine(g_renderer, cx - row, ty + row, cx + row, ty + row);
+            }
+        }
+
+        // Frequency label below
+        int label_y = bar_top + bar_max_h + 20;
+        const char *label = eq_get_band_label(i);
+        // Center label text under bar
+        int tw = 0, th = 0;
+        TTF_SizeText(g_font_small, label, &tw, &th);
+        render_text(label, cx - tw / 2, label_y, g_font_small, label_color);
+
+        // dB value above bar (positioned per column)
+        const char *db_str = eq_get_band_string(i);
+        TTF_SizeText(g_font_small, db_str, &tw, &th);
+        render_text(db_str, cx - tw / 2, bar_top - 36, g_font_small,
+                   (i == selected) ? COLOR_TEXT : COLOR_DIM);
     }
-
-    // Bar outline
-    SDL_SetRenderDrawColor(g_renderer, bass_label_color.r, bass_label_color.g, bass_label_color.b, 255);
-    SDL_SetRenderDrawBlendMode(g_renderer, SDL_BLENDMODE_NONE);
-    SDL_RenderDrawRect(g_renderer, &bar_bg);
-
-    // dB value
-    render_text(eq_get_bass_string(), db_x, bass_y, g_font_small, bass_label_color);
-
-    // Treble band
-    int treble_y = bass_y + 80;
-    int treble_db = eq_get_treble();
-    float treble_fill = (float)(treble_db + 12) / 24.0f;
-    int treble_fill_w = (int)(treble_fill * bar_max_w);
-
-    SDL_Color treble_label_color = (selected == 1) ? COLOR_TEXT : COLOR_DIM;
-    SDL_Color treble_bar_color = (selected == 1) ? COLOR_ACCENT : COLOR_DIM;
-
-    render_text("Treble", label_x, treble_y, g_font_small, treble_label_color);
-
-    // Bar background
-    SDL_SetRenderDrawColor(g_renderer, COLOR_DIM.r, COLOR_DIM.g, COLOR_DIM.b, 80);
-    SDL_SetRenderDrawBlendMode(g_renderer, SDL_BLENDMODE_BLEND);
-    SDL_Rect treble_bar_bg = {bar_x, treble_y + 4, bar_max_w, bar_h};
-    SDL_RenderFillRect(g_renderer, &treble_bar_bg);
-
-    // Bar fill
-    if (treble_fill_w > 0) {
-        SDL_SetRenderDrawColor(g_renderer, treble_bar_color.r, treble_bar_color.g, treble_bar_color.b, 255);
-        SDL_SetRenderDrawBlendMode(g_renderer, SDL_BLENDMODE_NONE);
-        SDL_Rect treble_fill_rect = {bar_x, treble_y + 4, treble_fill_w, bar_h};
-        SDL_RenderFillRect(g_renderer, &treble_fill_rect);
-    }
-
-    // Bar outline
-    SDL_SetRenderDrawColor(g_renderer, treble_label_color.r, treble_label_color.g, treble_label_color.b, 255);
-    SDL_SetRenderDrawBlendMode(g_renderer, SDL_BLENDMODE_NONE);
-    SDL_RenderDrawRect(g_renderer, &treble_bar_bg);
-
-    // dB value
-    render_text(eq_get_treble_string(), db_x, treble_y, g_font_small, treble_label_color);
 
     // Footer hints
-    render_text("A:Reset", box_x + 40, box_y + box_h - 44, g_font_small, COLOR_DIM);
-    // Right-align "B:Back"
-    render_text("B:Back", box_x + box_w - 160, box_y + box_h - 44, g_font_small, COLOR_DIM);
+    render_text(BTN_A ":Reset", box_x + 40, box_y + box_h - 44, g_font_small, COLOR_DIM);
+    render_text(BTN_B ":Back", box_x + box_w - 160, box_y + box_h - 44, g_font_small, COLOR_DIM);
 
+    render_version_watermark();
     SDL_RenderPresent(g_renderer);
 }
 
@@ -1641,9 +1725,10 @@ static void render_help_overlay(const char *title, const char *lines[], int line
 #ifdef __APPLE__
     render_text_centered("H:Close", box_y + box_h - 60, g_font_small, COLOR_DIM);
 #else
-    render_text_centered("X:Close", box_y + box_h - 60, g_font_small, COLOR_DIM);
+    render_text_centered(BTN_X ":Close", box_y + box_h - 60, g_font_small, COLOR_DIM);
 #endif
 
+    render_version_watermark();
     SDL_RenderPresent(g_renderer);
 }
 
@@ -1697,7 +1782,7 @@ void ui_render_loading(const char *filename) {
     SDL_RenderClear(g_renderer);
 
     // Header
-    render_text("> Mono", MARGIN, 8, g_font_medium, COLOR_TEXT);
+    render_header("> Loading", COLOR_TEXT, false);
 
     // Loading message (centered)
     render_text_centered("Loading...", g_screen_height / 2 - 40, g_font_large, COLOR_ACCENT);
@@ -1707,6 +1792,7 @@ void ui_render_loading(const char *filename) {
         render_text_centered(filename, g_screen_height / 2 + 40, g_font_medium, COLOR_DIM);
     }
 
+    render_version_watermark();
     SDL_RenderPresent(g_renderer);
 }
 
@@ -1716,7 +1802,7 @@ void ui_render_scanning(int current, int total, const char *current_file, int fo
     SDL_RenderClear(g_renderer);
 
     // Header
-    render_text("> Mono", MARGIN, 8, g_font_medium, COLOR_TEXT);
+    render_header("> Scanner", COLOR_TEXT, false);
 
     // Title
     render_text_centered("Scanning Metadata...", g_screen_height / 2 - 100, g_font_large, COLOR_ACCENT);
@@ -1755,8 +1841,9 @@ void ui_render_scanning(int current, int total, const char *current_file, int fo
     render_text_centered(found_text, bar_y + bar_h + 100, g_font_medium, COLOR_HIGHLIGHT);
 
     // Cancel hint
-    render_text_centered("B: Cancel", g_screen_height - 60, g_font_small, COLOR_DIM);
+    render_text_centered(BTN_B ": Cancel", g_screen_height - 60, g_font_small, COLOR_DIM);
 
+    render_version_watermark();
     SDL_RenderPresent(g_renderer);
 }
 
@@ -1766,7 +1853,7 @@ void ui_render_scan_complete(int found, int total) {
     SDL_RenderClear(g_renderer);
 
     // Header
-    render_text("> Mono", MARGIN, 8, g_font_medium, COLOR_TEXT);
+    render_header("> Scanner", COLOR_TEXT, false);
 
     // Title
     render_text_centered("Scan Complete!", g_screen_height / 2 - 60, g_font_large, COLOR_ACCENT);
@@ -1779,6 +1866,7 @@ void ui_render_scan_complete(int found, int total) {
     // Hint
     render_text_centered("Press any button to continue", g_screen_height - 100, g_font_small, COLOR_DIM);
 
+    render_version_watermark();
     SDL_RenderPresent(g_renderer);
 }
 
@@ -1788,7 +1876,7 @@ void ui_render_error(const char *message) {
     SDL_RenderClear(g_renderer);
 
     // Header
-    render_text("> Mono", MARGIN, 8, g_font_medium, COLOR_TEXT);
+    render_header("> Error", COLOR_TEXT, false);
 
     // Error icon/text (centered)
     render_text_centered("Error", g_screen_height / 2 - 60, g_font_large, COLOR_ERROR);
@@ -1801,6 +1889,7 @@ void ui_render_error(const char *message) {
     // Hint
     render_text_centered("Press any button to continue", g_screen_height - 100, g_font_small, COLOR_DIM);
 
+    render_version_watermark();
     SDL_RenderPresent(g_renderer);
 }
 
@@ -1871,8 +1960,9 @@ void ui_render_file_menu(void) {
     }
 
     // Controls hint (same position as help overlay)
-    render_text_centered("A:Select  B:Cancel", box_y + box_h - 60, g_font_small, COLOR_DIM);
+    render_text_centered(BTN_A ":Select  " BTN_B ":Cancel", box_y + box_h - 60, g_font_small, COLOR_DIM);
 
+    render_version_watermark();
     SDL_RenderPresent(g_renderer);
 }
 
@@ -1918,10 +2008,11 @@ void ui_render_confirm_delete(void) {
     }
 
     // Controls hint
-    render_text_centered("A:Confirm  B:Cancel", box_y + box_h - 50, g_font_small, COLOR_DIM);
+    render_text_centered(BTN_A ":Confirm  " BTN_B ":Cancel", box_y + box_h - 50, g_font_small, COLOR_DIM);
 
     // Reset blend mode and present
     SDL_SetRenderDrawBlendMode(g_renderer, SDL_BLENDMODE_NONE);
+    render_version_watermark();
     SDL_RenderPresent(g_renderer);
 }
 
@@ -1956,10 +2047,11 @@ void ui_render_resume_prompt(int saved_pos) {
     render_text_centered(position_text, box_y + 100, g_font_medium, COLOR_TEXT);
 
     // Controls hint
-    render_text_centered("A:Resume  B:Start Over", box_y + box_h - 50, g_font_small, COLOR_DIM);
+    render_text_centered(BTN_A ":Resume  " BTN_B ":Start Over", box_y + box_h - 50, g_font_small, COLOR_DIM);
 
     // Reset blend mode and present
     SDL_SetRenderDrawBlendMode(g_renderer, SDL_BLENDMODE_NONE);
+    render_version_watermark();
     SDL_RenderPresent(g_renderer);
 }
 
@@ -2032,9 +2124,10 @@ void ui_render_rename(void) {
 
     // Controls
     int ctrl_y = g_screen_height - 80;
-    render_text_centered("D-Pad: Move   A: Insert   B: Delete", ctrl_y, g_font_small, COLOR_DIM);
-    render_text_centered("Start: Confirm   Select: Cancel", ctrl_y + 35, g_font_small, COLOR_DIM);
+    render_text_centered("D-Pad: Move   " BTN_A ": Insert   " BTN_B ": Delete", ctrl_y, g_font_small, COLOR_DIM);
+    render_text_centered(BTN_START ": Confirm   " BTN_SELECT ": Cancel", ctrl_y + 35, g_font_small, COLOR_DIM);
 
+    render_version_watermark();
     SDL_RenderPresent(g_renderer);
 }
 
@@ -2071,6 +2164,7 @@ void ui_render_youtube_search(void) {
         // Hint
         render_text_centered("Please wait...", g_screen_height - 100, g_font_small, COLOR_DIM);
 
+        render_version_watermark();
         SDL_RenderPresent(g_renderer);
         return;
     }
@@ -2149,9 +2243,10 @@ void ui_render_youtube_search(void) {
 
     // Controls
     int ctrl_y = g_screen_height - 100;
-    render_text_centered("D-Pad: Move   A: Insert   B: Delete", ctrl_y, g_font_small, COLOR_DIM);
-    render_text_centered("Start: Search   Select: Cancel", ctrl_y + 30, g_font_small, COLOR_DIM);
+    render_text_centered("D-Pad: Move   " BTN_A ": Insert   " BTN_B ": Delete", ctrl_y, g_font_small, COLOR_DIM);
+    render_text_centered(BTN_START ": Search   " BTN_SELECT ": Cancel", ctrl_y + 30, g_font_small, COLOR_DIM);
 
+    render_version_watermark();
     SDL_RenderPresent(g_renderer);
 }
 
@@ -2277,15 +2372,16 @@ void ui_render_youtube_results(void) {
     int pending = dlqueue_pending_count();
     if (pending > 0) {
         char hint[64];
-        snprintf(hint, sizeof(hint), "A:Add (%d)  X:Queue  B:Back", pending);
-        render_text(hint, MARGIN, g_screen_height - 25, g_font_small, COLOR_DIM);
+        snprintf(hint, sizeof(hint), "%s:Add (%d)  %s:Queue  %s:Back", BTN_A, pending, BTN_X, BTN_B);
+        render_text(hint, MARGIN, g_screen_height - SCREEN_PAD - 22, g_font_hint, COLOR_DIM);
     } else {
-        render_text("A:Add to queue  X:View queue  B:Back", MARGIN, g_screen_height - 25, g_font_small, COLOR_DIM);
+        render_text(BTN_A ":Add to queue  " BTN_X ":View queue  " BTN_B ":Back", MARGIN, g_screen_height - SCREEN_PAD - 22, g_font_hint, COLOR_DIM);
     }
 
     // Render toast overlay before present
     render_toast_overlay();
 
+    render_version_watermark();
     SDL_RenderPresent(g_renderer);
 }
 
@@ -2295,7 +2391,7 @@ void ui_render_youtube_download(void) {
     SDL_RenderClear(g_renderer);
 
     // Header
-    render_text("> YouTube", MARGIN, 8, g_font_medium, COLOR_TEXT);
+    render_header("> YouTube", COLOR_TEXT, false);
 
     // Title "DOWNLOADING"
     render_text_centered("DOWNLOADING", 80, g_font_large, COLOR_ACCENT);
@@ -2353,8 +2449,9 @@ void ui_render_youtube_download(void) {
     }
 
     // Cancel hint
-    render_text_centered("B: Cancel", g_screen_height - 60, g_font_small, COLOR_DIM);
+    render_text_centered(BTN_B ": Cancel", g_screen_height - 60, g_font_small, COLOR_DIM);
 
+    render_version_watermark();
     SDL_RenderPresent(g_renderer);
 }
 
@@ -2374,7 +2471,8 @@ void ui_render_download_queue(void) {
     if (total == 0) {
         render_text_centered("Queue is empty", g_screen_height / 2 - 40, g_font_medium, COLOR_DIM);
         render_text_centered("Press A on search results to add downloads", g_screen_height / 2 + 20, g_font_small, COLOR_DIM);
-        render_text_centered("B: Back", g_screen_height - 60, g_font_small, COLOR_DIM);
+        render_text_centered(BTN_B ": Back", g_screen_height - 60, g_font_small, COLOR_DIM);
+        render_version_watermark();
         SDL_RenderPresent(g_renderer);
         return;
     }
@@ -2486,12 +2584,13 @@ void ui_render_download_queue(void) {
     render_text_centered(footer, g_screen_height - 65, g_font_small, COLOR_DIM);
 
     // Controls hint
-    render_text("A:Play  Y:Clear completed  X:Cancel  B:Back",
-               MARGIN, g_screen_height - 25, g_font_small, COLOR_DIM);
+    render_text(BTN_A ":Play  " BTN_Y ":Clear completed  " BTN_X ":Cancel  " BTN_B ":Back",
+               MARGIN, g_screen_height - SCREEN_PAD - 22, g_font_hint, COLOR_DIM);
 
     // Render toast overlay before present
     render_toast_overlay();
 
+    render_version_watermark();
     SDL_RenderPresent(g_renderer);
 }
 
@@ -2557,6 +2656,36 @@ static void render_toast_overlay(void) {
     }
 }
 
+/**
+ * Internal: Render version watermark (bottom-right corner)
+ */
+static void render_version_watermark(void) {
+    char version_str[32];
+    snprintf(version_str, sizeof(version_str), "v%s", VERSION);
+
+    // Render small, dimmed text in bottom-right corner
+    int text_w, text_h;
+    TTF_SizeUTF8(g_font_tiny, version_str, &text_w, &text_h);
+
+    int x = g_screen_width - text_w - SCREEN_PAD;
+    int y = g_screen_height - text_h - SCREEN_PAD;
+
+    // Very dim color (like a watermark)
+    SDL_Color watermark_color = {COLOR_DIM.r, COLOR_DIM.g, COLOR_DIM.b, 128};
+
+    SDL_Surface *surface = TTF_RenderUTF8_Blended(g_font_tiny, version_str, watermark_color);
+    if (surface) {
+        SDL_Texture *texture = SDL_CreateTextureFromSurface(g_renderer, surface);
+        if (texture) {
+            SDL_SetTextureAlphaMod(texture, 128);  // 50% opacity
+            SDL_Rect dest = {x, y, text_w, text_h};
+            SDL_RenderCopy(g_renderer, texture, NULL, &dest);
+            SDL_DestroyTexture(texture);
+        }
+        SDL_FreeSurface(surface);
+    }
+}
+
 void ui_show_toast(const char *message) {
     if (!message) {
         g_toast_message[0] = '\0';
@@ -2581,4 +2710,479 @@ void ui_player_reset_scroll(void) {
     g_player_artist_scroll = 0;
     g_player_scroll_last_update = SDL_GetTicks() + PLAYER_SCROLL_PAUSE_MS;
     g_player_last_title[0] = '\0';
+}
+
+// ============================================================================
+// Spotify UI Render Functions
+// ============================================================================
+
+void ui_render_spotify_connect(void) {
+    // Clear screen
+    SDL_SetRenderDrawColor(g_renderer, COLOR_BG.r, COLOR_BG.g, COLOR_BG.b, 255);
+    SDL_RenderClear(g_renderer);
+
+    // Header
+    render_text("> Spotify Connect", MARGIN, 8, g_font_medium, COLOR_ACCENT);
+    render_status_bar();
+    draw_rect(0, HEADER_HEIGHT, g_screen_width, 2, COLOR_DIM);
+
+    // Main instruction text
+    render_text_centered("Open Spotify on your phone", g_screen_height / 2 - 120, g_font_medium, COLOR_TEXT);
+    render_text_centered("and select 'Mono'", g_screen_height / 2 - 70, g_font_medium, COLOR_TEXT);
+
+    // Animated monkey (always animating while waiting)
+    int monkey_x = (g_screen_width - 16 * MONKEY_PIXEL_SIZE) / 2;
+    int monkey_y = g_screen_height / 2 + 10;
+    render_monkey(monkey_x, monkey_y, true);
+
+    // Status message
+    SpotifyState sp_state = spotify_get_state();
+    const char *status_msg = "Waiting for connection...";
+    SDL_Color status_color = COLOR_DIM;
+
+    if (sp_state == SP_STATE_CONNECTED) {
+        status_msg = "Connected!";
+        status_color = COLOR_ACCENT;
+    } else if (sp_state == SP_STATE_ERROR) {
+        const char *err = spotify_get_error();
+        status_msg = err ? err : "Connection error";
+        status_color = COLOR_ERROR;
+    }
+
+    render_text_centered(status_msg, g_screen_height / 2 + 80, g_font_small, status_color);
+
+    // Cached credentials hint
+    if (spotify_has_cached_credentials()) {
+        render_text_centered("(Cached login found - auto-connecting)", g_screen_height / 2 + 120, g_font_small, COLOR_DIM);
+    }
+
+    // Footer
+    render_text(BTN_B ": Back", MARGIN, g_screen_height - SCREEN_PAD - 22, g_font_hint, COLOR_DIM);
+
+    render_version_watermark();
+    SDL_RenderPresent(g_renderer);
+}
+
+void ui_render_spotify_search(void) {
+    // Clear screen
+    SDL_SetRenderDrawColor(g_renderer, COLOR_BG.r, COLOR_BG.g, COLOR_BG.b, 255);
+    SDL_RenderClear(g_renderer);
+
+    // Check if searching - show loading indicator
+    if (spsearch_get_state() == SPSEARCH_SEARCHING) {
+        render_text_centered("Spotify Search", 20, g_font_medium, COLOR_ACCENT);
+        render_text_centered("Searching...", g_screen_height / 2 - 80, g_font_large, COLOR_ACCENT);
+
+        const char *query = spsearch_get_query();
+        if (query && query[0]) {
+            char display[128];
+            snprintf(display, sizeof(display), "\"%s\"", query);
+            render_text_centered(display, g_screen_height / 2 - 20, g_font_medium, COLOR_TEXT);
+        }
+
+        int monkey_x = (g_screen_width - 16 * MONKEY_PIXEL_SIZE) / 2;
+        int monkey_y = g_screen_height / 2 + 40;
+        render_monkey(monkey_x, monkey_y, true);
+
+        render_text_centered("Please wait...", g_screen_height - 100, g_font_small, COLOR_DIM);
+
+        render_version_watermark();
+        SDL_RenderPresent(g_renderer);
+        return;
+    }
+
+    // Title
+    render_text_centered("Spotify Search", 20, g_font_medium, COLOR_ACCENT);
+
+    // Current query with cursor
+    const char *query = spsearch_get_query();
+    int cursor_pos = spsearch_get_cursor();
+    int text_y = 80;
+
+    // Text box background
+    int box_w = g_screen_width - 80;
+    int box_x = 40;
+    draw_rect(box_x, text_y - 8, box_w, 50, COLOR_HIGHLIGHT);
+
+    // Render query with cursor indicator
+    char display[300];
+    if (query[0]) {
+        snprintf(display, sizeof(display), "%.*s|%s", cursor_pos, query, query + cursor_pos);
+    } else {
+        snprintf(display, sizeof(display), "|");
+    }
+    render_text(display, box_x + 12, text_y, g_font_small, COLOR_TEXT);
+
+    // Grid keyboard (QWERTY layout - same as YouTube search)
+    int kbd_cols, kbd_rows;
+    spsearch_get_kbd_size(&kbd_cols, &kbd_rows);
+    int cur_row, cur_col;
+    spsearch_get_kbd_pos(&cur_row, &cur_col);
+
+    int kbd_y = 150;
+    int cell_w = 100;
+    int cell_h = 70;
+    int kbd_w = kbd_cols * cell_w;
+    int kbd_x = (g_screen_width - kbd_w) / 2;
+
+    for (int row = 0; row < kbd_rows; row++) {
+        for (int col = 0; col < kbd_cols; col++) {
+            char c = spsearch_get_char_at(row, col);
+            if (c == '\0') continue;
+
+            int x = kbd_x + col * cell_w;
+            int y = kbd_y + row * cell_h;
+
+            bool is_selected = (row == cur_row && col == cur_col);
+
+            if (is_selected) {
+                draw_rect(x + 2, y + 2, cell_w - 4, cell_h - 4, COLOR_ACCENT);
+            }
+
+            char ch_str[2] = {c, '\0'};
+            if (c == ' ') {
+                strcpy(ch_str, "_");
+            }
+
+            int tw, th;
+            TTF_SizeUTF8(g_font_small, ch_str, &tw, &th);
+            int tx = x + (cell_w - tw) / 2;
+            int ty = y + (cell_h - th) / 2;
+
+            SDL_Color color = is_selected ? COLOR_BG : COLOR_TEXT;
+            render_text(ch_str, tx, ty, g_font_small, color);
+        }
+    }
+
+    // Error message
+    const char *error = spsearch_get_error();
+    if (error) {
+        render_text_centered(error, kbd_y + kbd_rows * cell_h + 10, g_font_small, COLOR_ERROR);
+    }
+
+    // Controls
+    int ctrl_y = g_screen_height - 100;
+    render_text_centered("D-Pad: Move   " BTN_A ": Insert   " BTN_B ": Delete", ctrl_y, g_font_small, COLOR_DIM);
+    render_text_centered(BTN_START ": Search   " BTN_SELECT ": Cancel", ctrl_y + 30, g_font_small, COLOR_DIM);
+
+    render_version_watermark();
+    SDL_RenderPresent(g_renderer);
+}
+
+// Scroll state for Spotify results title
+static int g_sp_scroll_offset = 0;
+static int g_sp_scroll_cursor = -1;
+static Uint32 g_sp_scroll_last_update = 0;
+#define SP_SCROLL_SPEED_MS 100
+#define SP_SCROLL_PAUSE_MS 1500
+
+void ui_render_spotify_results(void) {
+    // Clear screen
+    SDL_SetRenderDrawColor(g_renderer, COLOR_BG.r, COLOR_BG.g, COLOR_BG.b, 255);
+    SDL_RenderClear(g_renderer);
+
+    // Header
+    const char *query = spsearch_get_query();
+    char header[128];
+    snprintf(header, sizeof(header), "Spotify: %s", query);
+    render_text(header, MARGIN, 8, g_font_small, COLOR_TEXT);
+
+    // Results list
+    int result_count = spsearch_get_result_count();
+    int cursor = spsearch_get_results_cursor();
+    int scroll = spsearch_get_scroll_offset();
+
+    // Reset scroll when cursor changes
+    if (cursor != g_sp_scroll_cursor) {
+        g_sp_scroll_cursor = cursor;
+        g_sp_scroll_offset = 0;
+        g_sp_scroll_last_update = SDL_GetTicks() + SP_SCROLL_PAUSE_MS;
+    }
+
+    int y = HEADER_HEIGHT + 10;
+    int visible = 8;
+    int max_title_chars = 55;
+
+    for (int i = 0; i < visible && (scroll + i) < result_count; i++) {
+        int idx = scroll + i;
+        const SpotifyTrack *track = spsearch_get_result(idx);
+        if (!track) continue;
+
+        bool is_selected = (idx == cursor);
+
+        // Highlight selected item
+        if (is_selected) {
+            draw_rect(0, y - 5, g_screen_width, LINE_HEIGHT + 10, COLOR_HIGHLIGHT);
+        }
+
+        // Format duration
+        char duration_str[16];
+        spotify_format_duration(track->duration_ms, duration_str);
+
+        // Title with scroll for selected long titles
+        char title_display[256];
+        int title_len = strlen(track->title);
+
+        if (is_selected && title_len > max_title_chars) {
+            Uint32 now = SDL_GetTicks();
+            if (now > g_sp_scroll_last_update) {
+                if (now - g_sp_scroll_last_update > SP_SCROLL_SPEED_MS) {
+                    g_sp_scroll_offset++;
+                    g_sp_scroll_last_update = now;
+                    if (g_sp_scroll_offset > title_len - max_title_chars + 10) {
+                        g_sp_scroll_offset = 0;
+                        g_sp_scroll_last_update = now + SP_SCROLL_PAUSE_MS;
+                    }
+                }
+            }
+
+            int start = g_sp_scroll_offset;
+            if (start > title_len) start = 0;
+            snprintf(title_display, sizeof(title_display), "%.*s",
+                     max_title_chars, track->title + start);
+        } else if (title_len > max_title_chars) {
+            snprintf(title_display, sizeof(title_display), "%.*s...",
+                     max_title_chars - 3, track->title);
+        } else {
+            strncpy(title_display, track->title, sizeof(title_display) - 1);
+            title_display[sizeof(title_display) - 1] = '\0';
+        }
+
+        // Render title
+        render_text(title_display, MARGIN + 10, y,
+                   g_font_small, is_selected ? COLOR_ACCENT : COLOR_TEXT);
+
+        // Render artist, album, and duration
+        char meta_display[256];
+        snprintf(meta_display, sizeof(meta_display), "%.25s - %.20s  [%s]",
+                 track->artist, track->album, duration_str);
+        render_text(meta_display, MARGIN + 20, y + 28,
+                   g_font_small, COLOR_DIM);
+
+        y += LINE_HEIGHT + 10;
+    }
+
+    // Scroll indicators
+    if (scroll > 0) {
+        render_text_centered("^ more ^", HEADER_HEIGHT - 5, g_font_small, COLOR_DIM);
+    }
+    if (scroll + visible < result_count) {
+        render_text_centered("v more v", g_screen_height - 70, g_font_small, COLOR_DIM);
+    }
+
+    // Footer
+    char footer[64];
+    snprintf(footer, sizeof(footer), "%d of %d", cursor + 1, result_count);
+    render_text_centered(footer, g_screen_height - 45, g_font_small, COLOR_DIM);
+
+    // Controls
+    render_text(BTN_A ": Play   " BTN_B ": Back to search", MARGIN, g_screen_height - SCREEN_PAD - 22, g_font_hint, COLOR_DIM);
+
+    // Render toast overlay
+    render_toast_overlay();
+
+    render_version_watermark();
+    SDL_RenderPresent(g_renderer);
+}
+
+void ui_render_spotify_player(void) {
+    // Clear screen
+    SDL_SetRenderDrawColor(g_renderer, COLOR_BG.r, COLOR_BG.g, COLOR_BG.b, 255);
+    SDL_RenderClear(g_renderer);
+
+    // Header
+    render_header("> Spotify", COLOR_TEXT, true);
+    render_status_bar();
+    draw_rect(0, HEADER_HEIGHT, g_screen_width, 2, COLOR_DIM);
+
+    // Get current track info
+    const SpotifyTrack *track = spotify_get_current_track();
+
+    // Center area for track info
+    int center_y = g_screen_height / 2 - 60;
+
+    if (track) {
+        // Title
+        render_text_centered(track->title, center_y, g_font_large, COLOR_TEXT);
+        // Artist
+        render_text_centered(track->artist, center_y + 70, g_font_medium, COLOR_DIM);
+        // Album
+        render_text_centered(track->album, center_y + 120, g_font_small, COLOR_DIM);
+    } else {
+        render_text_centered("Streaming via Spotify Connect", center_y, g_font_medium, COLOR_TEXT);
+        render_text_centered("Control from your phone", center_y + 60, g_font_small, COLOR_DIM);
+    }
+
+    // Buffer status
+    int buffered = sp_audio_buffered_seconds();
+    bool receiving = sp_audio_is_receiving();
+
+    char buf_status[64];
+    snprintf(buf_status, sizeof(buf_status), "Buffer: %ds %s",
+             buffered, receiving ? "[streaming]" : "[waiting]");
+    render_text_centered(buf_status, g_screen_height - 120, g_font_small,
+                        receiving ? COLOR_ACCENT : COLOR_DIM);
+
+    // Dancing monkey (animates while streaming)
+    int monkey_x = (g_screen_width - 16 * MONKEY_PIXEL_SIZE) / 2;
+    int monkey_y = g_screen_height - 180;
+    render_monkey(monkey_x, monkey_y, receiving);
+
+    // Footer
+    render_text(BTN_A ": Pause   " BTN_B ": Stop   Up/Down: Volume", MARGIN, g_screen_height - SCREEN_PAD - 22, g_font_hint, COLOR_DIM);
+
+    render_version_watermark();
+    SDL_RenderPresent(g_renderer);
+}
+
+void ui_render_update(void) {
+    // Clear screen
+    SDL_SetRenderDrawColor(g_renderer, COLOR_BG.r, COLOR_BG.g, COLOR_BG.b, 255);
+    SDL_RenderClear(g_renderer);
+
+    // Header
+    render_header("> Update", COLOR_TEXT, false);
+    render_status_bar();
+    draw_rect(0, HEADER_HEIGHT, g_screen_width, 2, COLOR_DIM);
+
+    UpdateState state = update_get_state();
+    const UpdateInfo *info = update_get_info();
+
+    int center_y = g_screen_height / 2;
+
+    switch (state) {
+        case UPDATE_IDLE:
+        case UPDATE_CHECKING: {
+            // Show checking animation with dancing monkey
+            render_text_centered("Checking for Updates...", center_y - 80, g_font_large, COLOR_ACCENT);
+            render_text_centered("Connecting to GitHub", center_y - 20, g_font_medium, COLOR_DIM);
+
+            // Dancing monkey while checking
+            int monkey_x = (g_screen_width - 16 * MONKEY_PIXEL_SIZE) / 2;
+            int monkey_y = center_y + 40;
+            render_monkey(monkey_x, monkey_y, true);
+            break;
+        }
+
+        case UPDATE_AVAILABLE: {
+            // Show version info and changelog
+            render_text_centered("Update Available!", center_y - 140, g_font_large, COLOR_ACCENT);
+
+            // Version comparison
+            char version_text[128];
+            snprintf(version_text, sizeof(version_text), "Current: v%s  ->  New: %s", VERSION, info->version);
+            render_text_centered(version_text, center_y - 80, g_font_medium, COLOR_TEXT);
+
+            // Changelog preview (first 3 lines)
+            if (info->changelog[0]) {
+                char changelog_preview[512];
+                strncpy(changelog_preview, info->changelog, sizeof(changelog_preview) - 1);
+                changelog_preview[sizeof(changelog_preview) - 1] = '\0';
+
+                // Find first 3 lines
+                char *line = strtok(changelog_preview, "\n");
+                int line_y = center_y - 20;
+                int lines = 0;
+                while (line && lines < 4) {
+                    if (line[0]) {  // Skip empty lines
+                        render_text_centered(line, line_y, g_font_small, COLOR_DIM);
+                        line_y += 30;
+                        lines++;
+                    }
+                    line = strtok(NULL, "\n");
+                }
+            }
+
+            // Size info
+            if (info->size_bytes > 0) {
+                char size_text[64];
+                if (info->size_bytes > 1024 * 1024) {
+                    snprintf(size_text, sizeof(size_text), "Size: %.1f MB",
+                             (float)info->size_bytes / (1024 * 1024));
+                } else {
+                    snprintf(size_text, sizeof(size_text), "Size: %.0f KB",
+                             (float)info->size_bytes / 1024);
+                }
+                render_text_centered(size_text, center_y + 100, g_font_small, COLOR_DIM);
+            }
+
+            // Footer
+            render_text(BTN_A ": Download   " BTN_B ": Later", MARGIN, g_screen_height - SCREEN_PAD - 22, g_font_hint, COLOR_DIM);
+            break;
+        }
+
+        case UPDATE_DOWNLOADING: {
+            // Show download progress
+            render_text_centered("Downloading...", center_y - 80, g_font_large, COLOR_ACCENT);
+
+            // Progress bar
+            int bar_w = 600;
+            int bar_h = 40;
+            int bar_x = (g_screen_width - bar_w) / 2;
+            int bar_y = center_y - 10;
+
+            // Background
+            draw_rect(bar_x, bar_y, bar_w, bar_h, COLOR_DIM);
+
+            // Progress fill
+            int progress = update_get_progress();
+            int fill_w = (bar_w - 4) * progress / 100;
+            draw_rect(bar_x + 2, bar_y + 2, fill_w, bar_h - 4, COLOR_ACCENT);
+
+            // Progress text
+            char progress_text[32];
+            snprintf(progress_text, sizeof(progress_text), "%d%%", progress);
+            render_text_centered(progress_text, bar_y + bar_h + 30, g_font_medium, COLOR_TEXT);
+
+            // Dancing monkey
+            int monkey_x = (g_screen_width - 16 * MONKEY_PIXEL_SIZE) / 2;
+            int monkey_y = center_y + 100;
+            render_monkey(monkey_x, monkey_y, true);
+            break;
+        }
+
+        case UPDATE_READY: {
+            // Update applied successfully
+            render_text_centered("Update Ready!", center_y - 60, g_font_large, COLOR_ACCENT);
+            render_text_centered("Restart the app to use the new version.", center_y + 10, g_font_medium, COLOR_TEXT);
+
+            char version_text[64];
+            snprintf(version_text, sizeof(version_text), "Updated to %s", info->version);
+            render_text_centered(version_text, center_y + 70, g_font_medium, COLOR_DIM);
+
+            // Footer
+            render_text(BTN_B ": OK", MARGIN, g_screen_height - SCREEN_PAD - 22, g_font_hint, COLOR_DIM);
+            break;
+        }
+
+        case UPDATE_UP_TO_DATE: {
+            // Already on latest version
+            render_text_centered("You're up to date!", center_y - 40, g_font_large, COLOR_ACCENT);
+
+            char version_text[64];
+            snprintf(version_text, sizeof(version_text), "Version: v%s", VERSION);
+            render_text_centered(version_text, center_y + 30, g_font_medium, COLOR_DIM);
+
+            // Footer
+            render_text(BTN_B ": OK", MARGIN, g_screen_height - SCREEN_PAD - 22, g_font_hint, COLOR_DIM);
+            break;
+        }
+
+        case UPDATE_ERROR: {
+            // Error state
+            const char *error = update_get_error();
+            render_text_centered("Update Failed", center_y - 60, g_font_large, COLOR_ERROR);
+
+            if (error) {
+                render_text_centered(error, center_y + 10, g_font_medium, COLOR_DIM);
+            }
+
+            // Footer
+            render_text(BTN_A ": Retry   " BTN_B ": Cancel", MARGIN, g_screen_height - SCREEN_PAD - 22, g_font_hint, COLOR_DIM);
+            break;
+        }
+    }
+
+    render_version_watermark();
+    SDL_RenderPresent(g_renderer);
 }

@@ -6,6 +6,7 @@
  */
 
 #include "metadata.h"
+#include "version.h"
 #include "cJSON.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,7 +26,7 @@
 
 // MusicBrainz API
 #define MB_API_BASE "https://musicbrainz.org/ws/2/recording"
-#define MB_USER_AGENT "Mono/1.6 (https://github.com/berckan/mono)"
+#define MB_USER_AGENT VERSION_USER_AGENT
 
 // Rate limiting (1 request per second)
 #define RATE_LIMIT_MS 1100

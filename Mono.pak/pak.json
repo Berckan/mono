@@ -1,6 +1,6 @@
 {
   "name": "Mono",
-  "version": "v1.5.0",
+  "version": "v1.7.0",
   "type": "TOOL",
   "description": "Minimalist music player. Clean UI, favorites, state persistence.",
   "author": "berckan",
@@ -10,6 +10,9 @@
     "Favorites system (Y button)",
     "Resume playback on restart",
     "Shuffle, repeat, sleep timer",
-    "Screen dimming for battery save"
+    "Screen dimming for battery save",
+    "5-band equalizer",
+    "Gapless playback for FLAC",
+    "Self-update from GitHub"
   ]
 }

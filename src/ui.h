@@ -136,6 +136,31 @@ void ui_render_youtube_download(void);
 void ui_render_download_queue(void);
 
 /**
+ * Render Spotify Connect waiting screen
+ */
+void ui_render_spotify_connect(void);
+
+/**
+ * Render Spotify search input screen
+ */
+void ui_render_spotify_search(void);
+
+/**
+ * Render Spotify search results list
+ */
+void ui_render_spotify_results(void);
+
+/**
+ * Render Spotify now-playing screen (streaming)
+ */
+void ui_render_spotify_player(void);
+
+/**
+ * Render update screen (checking, available, downloading, ready)
+ */
+void ui_render_update(void);
+
+/**
  * Show a toast notification
  * @param message Toast message text
  */

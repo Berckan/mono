@@ -31,8 +31,8 @@ static int g_sleep_option_index = 0;
 static const MenuItem PLAYER_ITEMS[] = { MENU_SHUFFLE, MENU_REPEAT, MENU_SLEEP, MENU_EQUALIZER };
 static const int PLAYER_ITEM_COUNT = 4;
 
-static const MenuItem BROWSER_ITEMS[] = { MENU_THEME, MENU_POWER };
-static const int BROWSER_ITEM_COUNT = 2;
+static const MenuItem BROWSER_ITEMS[] = { MENU_THEME, MENU_POWER, MENU_UPDATE };
+static const int BROWSER_ITEM_COUNT = 3;
 
 // Label buffer for dynamic labels
 static char g_label_buf[64];
@@ -111,6 +111,10 @@ MenuResult menu_select(void) {
             state_notify_settings_changed();
             return MENU_RESULT_NONE;
 
+        case MENU_UPDATE:
+            printf("[MENU] Check for Updates selected\n");
+            return MENU_RESULT_UPDATE;
+
         default:
             return MENU_RESULT_NONE;
     }
@@ -154,6 +158,9 @@ const char* menu_get_item_label(int index) {
         case MENU_POWER:
             snprintf(g_label_buf, sizeof(g_label_buf), "Power: %s",
                      menu_get_power_string());
+            break;
+        case MENU_UPDATE:
+            snprintf(g_label_buf, sizeof(g_label_buf), "Check for Updates");
             break;
         default:
             g_label_buf[0] = '\0';
