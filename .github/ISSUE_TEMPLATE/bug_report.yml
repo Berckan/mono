@@ -1,0 +1,77 @@
+name: Bug Report
+description: Something isn't working as expected
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the bug clearly. What did you expect vs what actually happened?
+      placeholder: "When I press L2 in the player, nothing happens..."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: firmware
+    attributes:
+      label: Firmware
+      options:
+        - NextUI
+        - MinUI
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Mono version
+      description: Check in Settings > About or pak.json
+      placeholder: "v1.9.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of the app is affected?
+      multiple: true
+      options:
+        - Playback (MP3/FLAC/OGG)
+        - Browser / Navigation
+        - Bluetooth Audio
+        - Spotify Connect
+        - YouTube / Downloads
+        - Equalizer
+        - UI / Display
+        - Controls / Input
+        - Power / Suspend
+        - Self-Update
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: How can we trigger this bug?
+      placeholder: |
+        1. Open Mono
+        2. Navigate to a FLAC file
+        3. Press A to play
+        4. Press L2
+        5. Nothing happens
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs (optional)
+      description: "Paste logs from `/mnt/SDCARD/.userdata/tg5040/logs/Mono.log` if available"
+      render: shell
+    validations:
+      required: false

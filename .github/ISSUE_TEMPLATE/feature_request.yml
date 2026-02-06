@@ -1,0 +1,42 @@
+name: Feature Request
+description: Suggest a new feature or improvement
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: What would you like?
+      description: Describe the feature or improvement you'd like to see
+      placeholder: "It would be great if Mono could..."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of the app would this affect?
+      multiple: true
+      options:
+        - Playback
+        - Browser / Navigation
+        - Bluetooth Audio
+        - Spotify
+        - YouTube
+        - Equalizer
+        - UI / Display
+        - Controls
+        - New Integration
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Why is this useful?
+      description: Help us understand the use case
+      placeholder: "I often listen to podcasts and need..."
+    validations:
+      required: false

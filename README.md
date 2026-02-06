@@ -182,8 +182,21 @@ mono/
 
 ## Known Issues
 
-- **FLAC Resume**: Some FLAC files may start from the beginning instead of the saved position when resuming. This affects files without proper seek tables. MP3 files are not affected.
-- **Spotify Search**: Disabled pending Spotify Developer API access (new app creation blocked by Spotify as of Feb 2026). Spotify Connect receiver mode works.
+| Issue                                                                                  | Status       | Workaround                                                                         |
+| -------------------------------------------------------------------------------------- | ------------ | ---------------------------------------------------------------------------------- |
+| **FLAC Resume** — Some FLAC files restart from the beginning instead of saved position | Open         | Affects files without seek tables. MP3/OGG not affected                            |
+| **Spotify Search** — Disabled, shows "Soon" in home menu                               | Blocked      | Spotify blocked new developer app creation (Feb 2026). Connect receiver works fine |
+| **Bluetooth pairing** — Must be paired via NextUI settings before launching Mono       | By design    | Pair once in NextUI WiFi/BT settings, Mono auto-connects on launch                 |
+| **Power button race** — Rare: power button unresponsive after wake from suspend        | Intermittent | Press power again, EVIOCGRAB re-grabs on next cycle                                |
+| **Large libraries** — Initial scan of 1000+ files can be slow                          | Open         | Navigate into subfolders for faster loading                                        |
+
+## Contributing
+
+Found a bug? Want a feature? PRs welcome!
+
+- [Report a bug](https://github.com/berckan/mono/issues/new?template=bug_report.yml)
+- [Request a feature](https://github.com/berckan/mono/issues/new?template=feature_request.yml)
+- [Contributing guide](CONTRIBUTING.md)
 
 ## License
 
