@@ -24,15 +24,19 @@
 // Cache refresh intervals (milliseconds)
 #define VOLUME_REFRESH_MS 100     // Refresh volume every 100ms (responsive to hardware changes)
 #define BATTERY_REFRESH_MS 10000  // Refresh battery every 10 seconds
+#define CONNECTIVITY_REFRESH_MS 5000  // Refresh WiFi/BT every 5 seconds
 
 // Cached values
 static int g_cached_battery = -1;
 static int g_cached_volume = -1;
 static BatteryStatus g_cached_status = BATTERY_UNKNOWN;
+static bool g_cached_wifi = false;
+static bool g_cached_bluetooth = false;
 
 // Last refresh timestamps (milliseconds)
 static unsigned long g_last_volume_refresh = 0;
 static unsigned long g_last_battery_refresh = 0;
+static unsigned long g_last_connectivity_refresh = 0;
 
 /**
  * Get current time in milliseconds
@@ -161,12 +165,45 @@ static void refresh_volume_if_needed(void) {
     }
 }
 
+/**
+ * Refresh connectivity (WiFi + Bluetooth) cache if expired
+ */
+static void refresh_connectivity_if_needed(void) {
+    unsigned long now = get_time_ms();
+    if (now - g_last_connectivity_refresh >= CONNECTIVITY_REFRESH_MS || g_last_connectivity_refresh == 0) {
+#ifndef __APPLE__
+        // WiFi: check wlan0 operstate
+        char operstate[32];
+        if (read_sysfs_string("/sys/class/net/wlan0/operstate", operstate, sizeof(operstate)) == 0) {
+            g_cached_wifi = (strcmp(operstate, "up") == 0);
+        } else {
+            g_cached_wifi = false;
+        }
+
+        // Bluetooth: check if any device is connected
+        FILE *pipe = popen("bluetoothctl info 2>/dev/null | grep -c 'Connected: yes'", "r");
+        if (pipe) {
+            char buf[16];
+            if (fgets(buf, sizeof(buf), pipe)) {
+                g_cached_bluetooth = (atoi(buf) > 0);
+            }
+            pclose(pipe);
+        } else {
+            g_cached_bluetooth = false;
+        }
+#endif
+        g_last_connectivity_refresh = now;
+    }
+}
+
 int sysinfo_init(void) {
     // Force initial refresh
     g_last_battery_refresh = 0;
     g_last_volume_refresh = 0;
+    g_last_connectivity_refresh = 0;
     refresh_battery_if_needed();
     refresh_volume_if_needed();
+    refresh_connectivity_if_needed();
 
     // Success even if values unavailable (for desktop testing)
     return 0;
@@ -196,6 +233,16 @@ void sysinfo_refresh_volume(void) {
     // Force immediate refresh by resetting timestamp
     g_last_volume_refresh = 0;
     refresh_volume_if_needed();
+}
+
+bool sysinfo_is_wifi_connected(void) {
+    refresh_connectivity_if_needed();
+    return g_cached_wifi;
+}
+
+bool sysinfo_is_bluetooth_connected(void) {
+    refresh_connectivity_if_needed();
+    return g_cached_bluetooth;
 }
 
 void sysinfo_cleanup(void) {

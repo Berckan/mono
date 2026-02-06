@@ -119,8 +119,8 @@ static int g_eq_band = 0;
 // Joystick for input (raw joystick API - Trimui has incorrect Game Controller mapping)
 static SDL_Joystick *g_joystick = NULL;
 
-// Visible rows for resume/favorites lists
-#define LIST_VISIBLE_ROWS 8
+// Visible rows for resume/favorites lists (dynamic from UI)
+#define LIST_VISIBLE_ROWS ui_get_list_visible_rows()
 
 /**
  * Getters for home/resume/favorites state (used by UI)

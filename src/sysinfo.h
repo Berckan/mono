@@ -54,6 +54,16 @@ int sysinfo_get_volume(void);
 void sysinfo_refresh_volume(void);
 
 /**
+ * Check if WiFi is connected (wlan0 operstate == "up")
+ */
+bool sysinfo_is_wifi_connected(void);
+
+/**
+ * Check if a Bluetooth audio device is connected
+ */
+bool sysinfo_is_bluetooth_connected(void);
+
+/**
  * Cleanup system info module
  */
 void sysinfo_cleanup(void);

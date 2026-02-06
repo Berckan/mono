@@ -16,8 +16,9 @@
 // Maximum entries we can handle
 #define MAX_ENTRIES 1024
 
-// Visible items in list (for scroll calculation)
-#define VISIBLE_ITEMS 8
+// Visible items in list (dynamic from UI)
+#include "ui.h"
+#define VISIBLE_ITEMS ui_get_list_visible_rows()
 
 // File list
 static FileEntry g_entries[MAX_ENTRIES];

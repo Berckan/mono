@@ -12,7 +12,7 @@ static const ThemeColors THEMES[THEME_COUNT] = {
         .bg        = {18, 18, 18, 255},      // Near black (original)
         .text      = {255, 255, 255, 255},   // White
         .dim       = {70, 70, 70, 255},      // Dark Gray
-        .accent    = {255, 255, 255, 255},   // White
+        .accent    = {51, 255, 51, 255},     // Neon Green
         .highlight = {30, 30, 30, 255},      // Near Black
         .error     = {255, 51, 51, 255}      // Retro Red
     },

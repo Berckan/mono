@@ -170,6 +170,14 @@ static char g_player_last_title[256] = {0};  // Detect song change
 #define PLAYER_SCROLL_PAUSE_MS 2000     // Pause at start/end
 #define PLAYER_SCROLL_GAP "   •   "     // Visual separator between repetitions
 
+// List item scroll state (for selected item with long title)
+static int g_list_scroll_offset = 0;
+static int g_list_scroll_last_cursor = -1;   // Reset scroll when cursor moves
+static Uint32 g_list_scroll_last_update = 0;
+#define LIST_SCROLL_SPEED_MS 150        // Slow horizontal scroll
+#define LIST_SCROLL_PAUSE_MS 1500       // Pause before scrolling starts
+#define LIST_SCROLL_GAP "     "         // Gap between repetitions
+
 // Forward declarations for overlays
 static void render_toast_overlay(void);
 static void render_version_watermark(void);
@@ -519,6 +527,152 @@ static void render_text_truncated(const char *text, int x, int y, int max_width,
 }
 
 /**
+ * Render filename with extension in a dimmer color.
+ * Splits "prefix name.ext" → renders "prefix name" in main color, ".ext" in dim.
+ * Returns total rendered width.
+ */
+static int render_filename_with_ext(const char *text, int x, int y,
+                                     TTF_Font *font, SDL_Color color, SDL_Color ext_color) {
+    if (!text || !text[0]) return 0;
+
+    // Skip extension coloring for directories ([DIR], [..])
+    // and entries without a dot
+    const char *dot = strrchr(text, '.');
+    bool is_dir = (strncmp(text, "[DIR]", 5) == 0 || strncmp(text, "[..]", 4) == 0);
+    if (!dot || dot == text || is_dir) {
+        // No extension — render as-is
+        render_text(text, x, y, font, color);
+        int w;
+        TTF_SizeUTF8(font, text, &w, NULL);
+        return w;
+    }
+
+    // Render name part (everything before extension)
+    char name_part[256];
+    int name_len = (int)(dot - text);
+    if (name_len >= (int)sizeof(name_part)) name_len = sizeof(name_part) - 1;
+    strncpy(name_part, text, name_len);
+    name_part[name_len] = '\0';
+
+    render_text(name_part, x, y, font, color);
+
+    int name_w;
+    TTF_SizeUTF8(font, name_part, &name_w, NULL);
+
+    // Render extension part in dim color
+    render_text(dot, x + name_w, y, font, ext_color);
+
+    int ext_w;
+    TTF_SizeUTF8(font, dot, &ext_w, NULL);
+    return name_w + ext_w;
+}
+
+/**
+ * Render text that scrolls horizontally when wider than max_width.
+ * Only the selected item scrolls; non-selected items get truncated.
+ * Call with is_selected=true for the cursor item only.
+ */
+static void render_text_scrolling(const char *text, int x, int y, int max_width,
+                                  TTF_Font *font, SDL_Color color,
+                                  bool is_selected, int cursor) {
+    if (!text || !text[0]) return;
+
+    int text_width;
+    TTF_SizeUTF8(font, text, &text_width, NULL);
+
+    // Fits on screen — render with extension color
+    if (text_width <= max_width) {
+        SDL_Color ext_clr = {120, 180, 200, 255};  // Muted cyan for extensions
+        render_filename_with_ext(text, x, y, font, color, ext_clr);
+        if (is_selected) g_list_scroll_offset = 0;
+        return;
+    }
+
+    // Not selected — truncate with ellipsis
+    if (!is_selected) {
+        render_text_truncated(text, x, y, max_width, font, color);
+        return;
+    }
+
+    // Selected + overflows — scroll horizontally
+    // Reset scroll when cursor changes
+    if (cursor != g_list_scroll_last_cursor) {
+        g_list_scroll_offset = 0;
+        g_list_scroll_last_cursor = cursor;
+        g_list_scroll_last_update = SDL_GetTicks() + LIST_SCROLL_PAUSE_MS;
+    }
+
+    // Advance scroll
+    Uint32 now = SDL_GetTicks();
+    if (now > g_list_scroll_last_update &&
+        now - g_list_scroll_last_update > LIST_SCROLL_SPEED_MS) {
+        g_list_scroll_offset++;
+        g_list_scroll_last_update = now;
+    }
+
+    // Build looping text
+    char extended[512];
+    snprintf(extended, sizeof(extended), "%s%s%s", text, LIST_SCROLL_GAP, text);
+
+    int gap_len = (int)strlen(LIST_SCROLL_GAP);
+    int text_len = (int)strlen(text);
+    int cycle_len = text_len + gap_len;
+
+    if (g_list_scroll_offset >= cycle_len) {
+        g_list_scroll_offset = 0;
+        g_list_scroll_last_update = now + LIST_SCROLL_PAUSE_MS;
+    }
+
+    // Render visible portion using clip rect
+    int start = g_list_scroll_offset;
+    if (start >= (int)strlen(extended)) start = 0;
+
+    char visible[256];
+    int visible_len = 0;
+    const char *src = extended + start;
+
+    while (*src && visible_len < (int)sizeof(visible) - 1) {
+        visible[visible_len] = *src;
+        visible[visible_len + 1] = '\0';
+
+        int new_width;
+        TTF_SizeUTF8(font, visible, &new_width, NULL);
+        if (new_width > max_width) {
+            visible[visible_len] = '\0';
+            break;
+        }
+        visible_len++;
+        src++;
+    }
+
+    SDL_Color ext_clr = {120, 180, 200, 255};  // Muted cyan for extensions
+    render_filename_with_ext(visible, x, y, font, color, ext_clr);
+}
+
+/**
+ * Render accent title centered, fitting within max_width.
+ * Uses g_font_large if it fits, falls back to g_font_medium.
+ * Returns Y position for next element (title bottom + 50px gap).
+ */
+static int render_dialog_title(const char *text, int y, int max_width) {
+    if (!text || !text[0]) return y;
+
+    TTF_Font *font = g_font_large;
+    int w, h;
+    TTF_SizeUTF8(font, text, &w, &h);
+
+    // Fall back to medium if too wide
+    if (w > max_width) {
+        font = g_font_medium;
+        TTF_SizeUTF8(font, text, &w, &h);
+    }
+
+    int x = (g_screen_width - w) / 2;
+    render_text(text, x, y, font, COLOR_ACCENT);
+    return y + h + 5;   // minimal gap (font has internal padding)
+}
+
+/**
  * Render centered text
  */
 static void render_text_centered(const char *text, int y, TTF_Font *font, SDL_Color color) {
@@ -688,6 +842,12 @@ static void render_status_bar(void) {
         render_battery_icon(g_screen_width - 115 - right_margin, batt_y, batt_pct, charging);
     }
 
+    // WiFi + Bluetooth indicators (between volume and battery)
+    bool wifi_on = sysinfo_is_wifi_connected();
+    bool bt_on = sysinfo_is_bluetooth_connected();
+    render_text("W", g_screen_width - 185 - right_margin, text_y, g_font_small, wifi_on ? COLOR_ACCENT : COLOR_DIM);
+    render_text("B", g_screen_width - 155 - right_margin, text_y, g_font_small, bt_on ? COLOR_ACCENT : COLOR_DIM);
+
     // Volume indicator (to the left of battery, with more spacing) - white text
     char vol_str[16];
     int sys_vol = sysinfo_get_volume();
@@ -696,7 +856,7 @@ static void render_status_bar(void) {
     } else {
         snprintf(vol_str, sizeof(vol_str), "Vol:--");
     }
-    render_text(vol_str, g_screen_width - 280 - right_margin, text_y, g_font_small, COLOR_TEXT);
+    render_text(vol_str, g_screen_width - 340 - right_margin, text_y, g_font_small, COLOR_TEXT);
 }
 
 int ui_init(int width, int height) {
@@ -786,8 +946,7 @@ extern int resume_get_scroll(void);
 extern int favorites_get_cursor(void);
 extern int favorites_get_scroll(void);
 
-// Number of visible items in resume/favorites lists
-#define HOME_LIST_VISIBLE 8
+// (visible items calculated dynamically by ui_get_list_visible_rows)
 
 void ui_render_home(void) {
     // Clear screen
@@ -883,8 +1042,13 @@ void ui_render_resume(void) {
     int cursor = resume_get_cursor();
     int scroll = resume_get_scroll();
 
-    // List
-    int y = HEADER_HEIGHT + 8;
+    // Calculate how many items fit dynamically
+    int list_top = HEADER_HEIGHT + 8;
+    int list_bottom = g_screen_height - FOOTER_HEIGHT - 4;
+    int visible_count = (list_bottom - list_top) / LINE_HEIGHT;
+    if (visible_count < 1) visible_count = 1;
+
+    int y = list_top;
     int max_width = g_screen_width - MARGIN * 4;
 
     // Color for position indicator
@@ -895,7 +1059,7 @@ void ui_render_resume(void) {
         render_text_centered("No saved positions", g_screen_height / 2 - 60, g_font_medium, COLOR_DIM);
         render_monkey(g_screen_width / 2 - 48, g_screen_height / 2, false);
     } else {
-        for (int i = 0; i < HOME_LIST_VISIBLE && (scroll + i) < count; i++) {
+        for (int i = 0; i < visible_count && (scroll + i) < count; i++) {
             int idx = scroll + i;
             bool is_selected = (idx == cursor);
 
@@ -919,9 +1083,9 @@ void ui_render_resume(void) {
             int secs = pos_sec % 60;
             snprintf(display, sizeof(display), "> %s", filename);
 
-            // Render filename
+            // Render filename (small font + horizontal scroll for selected)
             SDL_Color color = is_selected ? COLOR_ACCENT : COLOR_TEXT;
-            render_text_truncated(display, MARGIN, y, max_width - 100, g_font_medium, color);
+            render_text_scrolling(display, MARGIN, y, max_width - 100, g_font_small, color, is_selected, cursor);
 
             // Render position on right side
             char pos_str[16];
@@ -930,19 +1094,25 @@ void ui_render_resume(void) {
 
             y += LINE_HEIGHT;
         }
+
+        // Scroll arrows when there are more items
+        if (scroll > 0) {
+            render_text_centered("\xe2\x96\xb2", HEADER_HEIGHT + 2, g_font_hint, COLOR_DIM);  // ▲
+        }
+        if (scroll + visible_count < count) {
+            render_text_centered("\xe2\x96\xbc", list_bottom + 2, g_font_hint, COLOR_DIM);  // ▼
+        }
     }
 
-    // Footer with scroll indicator
-    if (count > HOME_LIST_VISIBLE) {
-        draw_rect(0, g_screen_height - FOOTER_HEIGHT, g_screen_width, 2, COLOR_DIM);
-
-        char scroll_info[32];
-        snprintf(scroll_info, sizeof(scroll_info), "%d/%d", cursor + 1, count);
-        render_text(scroll_info, g_screen_width - 120 - SCREEN_PAD, g_screen_height - SCREEN_PAD - 22, g_font_hint, COLOR_DIM);
+    // Footer: controls + scroll position
+    char footer[96];
+    if (count > visible_count) {
+        snprintf(footer, sizeof(footer), "%s:Play  %s:Remove  %s:Back  %d/%d",
+                 BTN_A, BTN_Y, BTN_B, cursor + 1, count);
+    } else {
+        snprintf(footer, sizeof(footer), "%s:Play  %s:Remove  %s:Back", BTN_A, BTN_Y, BTN_B);
     }
-
-    // Controls hint
-    render_text(BTN_A ":Play  " BTN_Y ":Remove  " BTN_B ":Back", MARGIN, g_screen_height - SCREEN_PAD - 22, g_font_hint, COLOR_DIM);
+    render_text(footer, MARGIN, g_screen_height - SCREEN_PAD - 22, g_font_hint, COLOR_DIM);
 
     render_version_watermark();
     SDL_RenderPresent(g_renderer);
@@ -967,8 +1137,13 @@ void ui_render_favorites(void) {
     int cursor = favorites_get_cursor();
     int scroll = favorites_get_scroll();
 
-    // List
-    int y = HEADER_HEIGHT + 8;
+    // Calculate how many items fit dynamically
+    int list_top = HEADER_HEIGHT + 8;
+    int list_bottom = g_screen_height - FOOTER_HEIGHT - 4;
+    int visible_count = (list_bottom - list_top) / LINE_HEIGHT;
+    if (visible_count < 1) visible_count = 1;
+
+    int y = list_top;
     int max_width = g_screen_width - MARGIN * 4;
 
     if (count == 0) {
@@ -976,7 +1151,7 @@ void ui_render_favorites(void) {
         render_text_centered("No favorites yet", g_screen_height / 2 - 60, g_font_medium, COLOR_DIM);
         render_monkey(g_screen_width / 2 - 48, g_screen_height / 2, false);
     } else {
-        for (int i = 0; i < HOME_LIST_VISIBLE && (scroll + i) < count; i++) {
+        for (int i = 0; i < visible_count && (scroll + i) < count; i++) {
             int idx = scroll + i;
             bool is_selected = (idx == cursor);
 
@@ -1000,9 +1175,9 @@ void ui_render_favorites(void) {
             char display[300];
             snprintf(display, sizeof(display), "* %s", filename);
 
-            // Render filename
+            // Render filename (small font + horizontal scroll for selected)
             SDL_Color color = is_selected ? COLOR_ACCENT : COLOR_TEXT;
-            render_text_truncated(display, MARGIN, y, max_width - 100, g_font_medium, color);
+            render_text_scrolling(display, MARGIN, y, max_width - 100, g_font_small, color, is_selected, cursor);
 
             // Render position if available
             if (pos_sec > 0) {
@@ -1014,19 +1189,25 @@ void ui_render_favorites(void) {
 
             y += LINE_HEIGHT;
         }
+
+        // Scroll arrows when there are more items
+        if (scroll > 0) {
+            render_text_centered("\xe2\x96\xb2", HEADER_HEIGHT + 2, g_font_hint, COLOR_DIM);  // ▲
+        }
+        if (scroll + visible_count < count) {
+            render_text_centered("\xe2\x96\xbc", list_bottom + 2, g_font_hint, COLOR_DIM);  // ▼
+        }
     }
 
-    // Footer with scroll indicator
-    if (count > HOME_LIST_VISIBLE) {
-        draw_rect(0, g_screen_height - FOOTER_HEIGHT, g_screen_width, 2, COLOR_DIM);
-
-        char scroll_info[32];
-        snprintf(scroll_info, sizeof(scroll_info), "%d/%d", cursor + 1, count);
-        render_text(scroll_info, g_screen_width - 120 - SCREEN_PAD, g_screen_height - SCREEN_PAD - 22, g_font_hint, COLOR_DIM);
+    // Footer: controls + scroll position
+    char footer[96];
+    if (count > visible_count) {
+        snprintf(footer, sizeof(footer), "%s:Play  %s:Remove  %s:Back  %d/%d",
+                 BTN_A, BTN_Y, BTN_B, cursor + 1, count);
+    } else {
+        snprintf(footer, sizeof(footer), "%s:Play  %s:Remove  %s:Back", BTN_A, BTN_Y, BTN_B);
     }
-
-    // Controls hint
-    render_text(BTN_A ":Play  " BTN_Y ":Remove  " BTN_B ":Back", MARGIN, g_screen_height - SCREEN_PAD - 22, g_font_hint, COLOR_DIM);
+    render_text(footer, MARGIN, g_screen_height - SCREEN_PAD - 22, g_font_hint, COLOR_DIM);
 
     render_version_watermark();
     SDL_RenderPresent(g_renderer);
@@ -1072,13 +1253,23 @@ void ui_render_browser(void) {
     int cursor = browser_get_cursor();
     int scroll = browser_get_scroll_offset();
 
-    int y = HEADER_HEIGHT + 8;
+    // Calculate how many items fit dynamically
+    int list_top = HEADER_HEIGHT + 8;
+    int list_bottom = g_screen_height - FOOTER_HEIGHT - 4;
+    int visible_count = (list_bottom - list_top) / LINE_HEIGHT;
+    if (visible_count < 1) visible_count = 1;
+
+    int y = list_top;
     int max_width = g_screen_width - MARGIN * 4;
 
     // Color for played files (orange/amber)
     SDL_Color COLOR_PLAYED = {255, 160, 0, 255};
 
-    for (int i = 0; i < VISIBLE_ITEMS && (scroll + i) < count; i++) {
+    if (count == 0) {
+        render_text_centered("No music files found", g_screen_height / 2, g_font_medium, COLOR_DIM);
+    }
+
+    for (int i = 0; i < visible_count && (scroll + i) < count; i++) {
         const FileEntry *entry = browser_get_entry(scroll + i);
         if (!entry) continue;
 
@@ -1119,41 +1310,37 @@ void ui_render_browser(void) {
         } else {
             color = COLOR_TEXT;    // White for unplayed
         }
-        render_text_truncated(display, MARGIN, y, max_width, g_font_medium, color);
-
-        // Format indicator (right-aligned, files only)
-        if (entry->type == ENTRY_FILE) {
-            const char *fmt = audio_format_from_path(entry->full_path);
-            if (fmt[0]) {
-                int fmt_w;
-                TTF_SizeUTF8(g_font_small, fmt, &fmt_w, NULL);
-                render_text(fmt, g_screen_width - MARGIN * 2 - fmt_w, y + 4, g_font_small, COLOR_DIM);
-            }
-        }
+        render_text_scrolling(display, MARGIN, y, max_width, g_font_small, color, is_selected, cursor);
 
         y += LINE_HEIGHT;
     }
 
-    // Footer with scroll indicator
-    if (count > VISIBLE_ITEMS) {
-        draw_rect(0, g_screen_height - FOOTER_HEIGHT, g_screen_width, 2, COLOR_DIM);
-
-        char scroll_info[32];
-        snprintf(scroll_info, sizeof(scroll_info), "%d/%d", cursor + 1, count);
-        render_text(scroll_info, g_screen_width - 120 - SCREEN_PAD, g_screen_height - SCREEN_PAD - 22, g_font_hint, COLOR_DIM);
+    // Scroll arrows when there are more items
+    if (scroll > 0) {
+        render_text_centered("\xe2\x96\xb2", HEADER_HEIGHT + 2, g_font_hint, COLOR_DIM);  // ▲
+    }
+    if (scroll + visible_count < count) {
+        render_text_centered("\xe2\x96\xbc", list_bottom + 2, g_font_hint, COLOR_DIM);  // ▼
     }
 
-    // Empty directory message
-    if (count == 0) {
-        render_text_centered("No music files found", g_screen_height / 2, g_font_medium, COLOR_DIM);
-    }
-
-    // Controls hint
+    // Footer: controls + scroll position
+    char browse_footer[128];
 #ifdef __APPLE__
-    render_text(BTN_A ":Open  " BTN_Y ":Fav  " BTN_B ":Up  H:Help", MARGIN, g_screen_height - SCREEN_PAD - 22, g_font_hint, COLOR_DIM);
+    if (count > visible_count) {
+        snprintf(browse_footer, sizeof(browse_footer), "%s:Open  %s:Fav  %s:Up  H:Help  %d/%d",
+                 BTN_A, BTN_Y, BTN_B, cursor + 1, count);
+    } else {
+        snprintf(browse_footer, sizeof(browse_footer), "%s:Open  %s:Fav  %s:Up  H:Help", BTN_A, BTN_Y, BTN_B);
+    }
 #else
-    render_text(BTN_A ":Open  " BTN_Y ":Fav  " BTN_B ":Up  " BTN_X ":Help", MARGIN, g_screen_height - SCREEN_PAD - 22, g_font_hint, COLOR_DIM);
+    if (count > visible_count) {
+        snprintf(browse_footer, sizeof(browse_footer), "%s:Open  %s:Fav  %s:Up  %s:Help  %d/%d",
+                 BTN_A, BTN_Y, BTN_B, BTN_X, cursor + 1, count);
+    } else {
+        snprintf(browse_footer, sizeof(browse_footer), "%s:Open  %s:Fav  %s:Up  %s:Help", BTN_A, BTN_Y, BTN_B, BTN_X);
+    }
 #endif
+    render_text(browse_footer, MARGIN, g_screen_height - SCREEN_PAD - 22, g_font_hint, COLOR_DIM);
 
     render_version_watermark();
     SDL_RenderPresent(g_renderer);
@@ -1693,7 +1880,9 @@ void ui_render_equalizer(void) {
 /**
  * Internal: render help overlay content
  */
-static void render_help_overlay(const char *title, const char *lines[], int line_count) {
+static void render_help_overlay(const char *title,
+                                const char *keys[], const char *descs[],
+                                int line_count) {
     // Darken overlay
     SDL_SetRenderDrawBlendMode(g_renderer, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(g_renderer, 0, 0, 0, 200);
@@ -1714,10 +1903,13 @@ static void render_help_overlay(const char *title, const char *lines[], int line
     // Title (with proper spacing)
     render_text_centered(title, box_y + 30, g_font_medium, COLOR_ACCENT);
 
-    // Control lines
+    // Two-column layout with fixed X positions
+    int col1_x = box_x + 40;          // Key column
+    int col2_x = box_x + 260;         // Description column
     int line_y = box_y + title_space;
     for (int i = 0; i < line_count; i++) {
-        render_text(lines[i], box_x + 40, line_y, g_font_small, COLOR_TEXT);
+        render_text(keys[i], col1_x, line_y, g_font_small, COLOR_TEXT);
+        render_text(descs[i], col2_x, line_y, g_font_small, COLOR_TEXT);
         line_y += line_h;
     }
 
@@ -1738,42 +1930,36 @@ void ui_render_help_browser(void) {
     SDL_RenderClear(g_renderer);
     // Simplified background, then overlay
 
-    const char *lines[] = {
-        "D-Pad      Navigate list",
-        "A          Open / Play",
-        "B          Go up folder",
-        "Y          Toggle favorite",
-        "Select     File menu (Rename/Delete)",
-        "Start      Options menu",
-        "Start+B    Exit app",
-        "---        Legend ---",
-        "[..]       Parent folder",
-        "*          Favorite",
-        "Orange     Played before"
+    const char *keys[] = {
+        "D-Pad", "A", "B", "Y", "Select", "Start", "Start+B",
+        "---", "[..]", "*", "Orange"
+    };
+    const char *descs[] = {
+        "Navigate list", "Open / Play", "Go up folder",
+        "Toggle favorite", "File menu (Rename/Delete)",
+        "Options menu", "Exit app",
+        "Legend ---", "Parent folder", "Favorite", "Played before"
     };
 
-    render_help_overlay("File Browser", lines, 11);
+    render_help_overlay("File Browser", keys, descs, 11);
 }
 
 void ui_render_help_player(void) {
     // Render player content underneath
     ui_render_player_content();
 
-    const char *lines[] = {
-        "A          Play / Pause",
-        "B          Back to browser",
-        "L / R      Prev / Next track",
-        "D-Pad L/R  Seek (hold=faster)",
-        "D-Pad U/D  Volume",
-        "L2         Jump to start",
-        "R2         Jump near end",
-        "Y          Toggle favorite",
-        "Select     Dim screen",
-        "Start      Options menu",
-        "Start+B    Exit app"
+    const char *keys[] = {
+        "A", "B", "L / R", "D-Pad L/R", "D-Pad U/D",
+        "L2", "R2", "Y", "Select", "Start", "Start+B"
+    };
+    const char *descs[] = {
+        "Play / Pause", "Back to browser", "Prev / Next track",
+        "Seek (hold=faster)", "Volume",
+        "Jump to start", "Jump near end",
+        "Toggle favorite", "Dim screen", "Options menu", "Exit app"
     };
 
-    render_help_overlay("Now Playing", lines, 11);
+    render_help_overlay("Now Playing", keys, descs, 11);
 }
 
 void ui_render_loading(const char *filename) {
@@ -1784,12 +1970,12 @@ void ui_render_loading(const char *filename) {
     // Header
     render_header("> Loading", COLOR_TEXT, false);
 
-    // Loading message (centered)
-    render_text_centered("Loading...", g_screen_height / 2 - 40, g_font_large, COLOR_ACCENT);
+    // Loading message (centered, fits screen)
+    int next_y = render_dialog_title("Loading...", g_screen_height / 2 - 40, g_screen_width - 60);
 
     // Filename (centered, below loading)
     if (filename && filename[0]) {
-        render_text_centered(filename, g_screen_height / 2 + 40, g_font_medium, COLOR_DIM);
+        render_text_centered(filename, next_y, g_font_medium, COLOR_DIM);
     }
 
     render_version_watermark();
@@ -1805,13 +1991,13 @@ void ui_render_scanning(int current, int total, const char *current_file, int fo
     render_header("> Scanner", COLOR_TEXT, false);
 
     // Title
-    render_text_centered("Scanning Metadata...", g_screen_height / 2 - 100, g_font_large, COLOR_ACCENT);
+    int scan_next_y = render_dialog_title("Scanning Metadata...", g_screen_height / 2 - 100, g_screen_width - 60);
 
     // Progress bar
     int bar_w = 500;
     int bar_h = 30;
     int bar_x = (g_screen_width - bar_w) / 2;
-    int bar_y = g_screen_height / 2 - 30;
+    int bar_y = scan_next_y;
 
     // Background
     draw_rect(bar_x, bar_y, bar_w, bar_h, COLOR_DIM);
@@ -1856,12 +2042,12 @@ void ui_render_scan_complete(int found, int total) {
     render_header("> Scanner", COLOR_TEXT, false);
 
     // Title
-    render_text_centered("Scan Complete!", g_screen_height / 2 - 60, g_font_large, COLOR_ACCENT);
+    int sc_next_y = render_dialog_title("Scan Complete!", g_screen_height / 2 - 60, g_screen_width - 60);
 
     // Results
     char results[128];
     snprintf(results, sizeof(results), "Found metadata for %d of %d files", found, total);
-    render_text_centered(results, g_screen_height / 2 + 20, g_font_medium, COLOR_TEXT);
+    render_text_centered(results, sc_next_y, g_font_medium, COLOR_TEXT);
 
     // Hint
     render_text_centered("Press any button to continue", g_screen_height - 100, g_font_small, COLOR_DIM);
@@ -2028,26 +2214,49 @@ void ui_render_resume_prompt(int saved_pos) {
     SDL_Rect overlay = {0, 0, g_screen_width, g_screen_height};
     SDL_RenderFillRect(g_renderer, &overlay);
 
-    // Calculate box size
-    int box_w = 650;
-    int box_h = 220;
+    // Format saved position as MM:SS
+    int mins = saved_pos / 60;
+    int secs = saved_pos % 60;
+    char position_text[64];
+    snprintf(position_text, sizeof(position_text), "Continue from %d:%02d", mins, secs);
+
+    // Measure all text to size box responsively
+    int title_w, title_h, sub_w, sub_h, hint_w, hint_h;
+    TTF_SizeUTF8(g_font_large, "Resume Playback?", &title_w, &title_h);
+    TTF_SizeUTF8(g_font_medium, position_text, &sub_w, &sub_h);
+    TTF_SizeUTF8(g_font_small, BTN_A ":Resume  " BTN_B ":Start Over", &hint_w, &hint_h);
+
+    int pad_x = 50;
+    int pad_top = 30;
+    int gap = 5;            // gap between title and subtitle (font has internal padding)
+    int gap_hint = 30;      // gap between subtitle and hint
+    int pad_bottom = 35;    // more space below hint than between texts
+
+    // Box sized to content
+    int content_w = title_w;
+    if (sub_w > content_w) content_w = sub_w;
+    if (hint_w > content_w) content_w = hint_w;
+    int box_w = content_w + pad_x * 2;
+    int box_h = pad_top + title_h + gap + sub_h + gap_hint + hint_h + pad_bottom;
     int box_x = (g_screen_width - box_w) / 2;
     int box_y = (g_screen_height - box_h) / 2;
 
     draw_rect(box_x, box_y, box_w, box_h, COLOR_HIGHLIGHT);
 
     // Title
-    render_text_centered("Resume Playback?", box_y + 30, g_font_large, COLOR_ACCENT);
+    int title_x = (g_screen_width - title_w) / 2;
+    int title_y = box_y + pad_top;
+    render_text("Resume Playback?", title_x, title_y, g_font_large, COLOR_ACCENT);
 
-    // Format saved position as MM:SS
-    int mins = saved_pos / 60;
-    int secs = saved_pos % 60;
-    char position_text[64];
-    snprintf(position_text, sizeof(position_text), "Continue from %d:%02d", mins, secs);
-    render_text_centered(position_text, box_y + 100, g_font_medium, COLOR_TEXT);
+    // Subtitle
+    int sub_x = (g_screen_width - sub_w) / 2;
+    int sub_y = title_y + title_h + gap;
+    render_text(position_text, sub_x, sub_y, g_font_medium, COLOR_TEXT);
 
     // Controls hint
-    render_text_centered(BTN_A ":Resume  " BTN_B ":Start Over", box_y + box_h - 50, g_font_small, COLOR_DIM);
+    int hint_x = (g_screen_width - hint_w) / 2;
+    int hint_y = sub_y + sub_h + gap_hint;
+    render_text(BTN_A ":Resume  " BTN_B ":Start Over", hint_x, hint_y, g_font_small, COLOR_DIM);
 
     // Reset blend mode and present
     SDL_SetRenderDrawBlendMode(g_renderer, SDL_BLENDMODE_NONE);
@@ -2146,7 +2355,7 @@ void ui_render_youtube_search(void) {
         render_text_centered("YouTube Search", 20, g_font_medium, COLOR_ACCENT);
 
         // Show searching message with animated monkey
-        render_text_centered("Searching...", g_screen_height / 2 - 80, g_font_large, COLOR_ACCENT);
+        render_dialog_title("Searching...", g_screen_height / 2 - 80, g_screen_width - 60);
 
         // Show query being searched
         const char *query = ytsearch_get_query();
@@ -2394,11 +2603,11 @@ void ui_render_youtube_download(void) {
     render_header("> YouTube", COLOR_TEXT, false);
 
     // Title "DOWNLOADING"
-    render_text_centered("DOWNLOADING", 80, g_font_large, COLOR_ACCENT);
+    int dl_next_y = render_dialog_title("DOWNLOADING", 80, g_screen_width - 60);
 
     // Dancing monkey below title
     int monkey_x = (g_screen_width - 16 * MONKEY_PIXEL_SIZE) / 2;
-    int monkey_y = 140;
+    int monkey_y = dl_next_y;
     render_monkey(monkey_x, monkey_y, true);  // true = dancing animation
 
     // Track title (100px below monkey area)
@@ -2712,6 +2921,13 @@ void ui_player_reset_scroll(void) {
     g_player_last_title[0] = '\0';
 }
 
+int ui_get_list_visible_rows(void) {
+    int list_top = HEADER_HEIGHT + 8;
+    int list_bottom = g_screen_height - FOOTER_HEIGHT - 4;
+    int rows = (list_bottom - list_top) / LINE_HEIGHT;
+    return rows > 0 ? rows : 1;
+}
+
 // ============================================================================
 // Spotify UI Render Functions
 // ============================================================================
@@ -2771,7 +2987,7 @@ void ui_render_spotify_search(void) {
     // Check if searching - show loading indicator
     if (spsearch_get_state() == SPSEARCH_SEARCHING) {
         render_text_centered("Spotify Search", 20, g_font_medium, COLOR_ACCENT);
-        render_text_centered("Searching...", g_screen_height / 2 - 80, g_font_large, COLOR_ACCENT);
+        render_dialog_title("Searching...", g_screen_height / 2 - 80, g_screen_width - 60);
 
         const char *query = spsearch_get_query();
         if (query && query[0]) {
@@ -3054,8 +3270,8 @@ void ui_render_update(void) {
         case UPDATE_IDLE:
         case UPDATE_CHECKING: {
             // Show checking animation with dancing monkey
-            render_text_centered("Checking for Updates...", center_y - 80, g_font_large, COLOR_ACCENT);
-            render_text_centered("Connecting to GitHub", center_y - 20, g_font_medium, COLOR_DIM);
+            int chk_y = render_dialog_title("Checking for Updates...", center_y - 80, g_screen_width - 60);
+            render_text_centered("Connecting to GitHub", chk_y, g_font_medium, COLOR_DIM);
 
             // Dancing monkey while checking
             int monkey_x = (g_screen_width - 16 * MONKEY_PIXEL_SIZE) / 2;
@@ -3066,12 +3282,12 @@ void ui_render_update(void) {
 
         case UPDATE_AVAILABLE: {
             // Show version info and changelog
-            render_text_centered("Update Available!", center_y - 140, g_font_large, COLOR_ACCENT);
+            int avail_y = render_dialog_title("Update Available!", center_y - 140, g_screen_width - 60);
 
             // Version comparison
             char version_text[128];
             snprintf(version_text, sizeof(version_text), "Current: v%s  ->  New: %s", VERSION, info->version);
-            render_text_centered(version_text, center_y - 80, g_font_medium, COLOR_TEXT);
+            render_text_centered(version_text, avail_y, g_font_medium, COLOR_TEXT);
 
             // Changelog preview (first 3 lines)
             if (info->changelog[0]) {
@@ -3113,13 +3329,13 @@ void ui_render_update(void) {
 
         case UPDATE_DOWNLOADING: {
             // Show download progress
-            render_text_centered("Downloading...", center_y - 80, g_font_large, COLOR_ACCENT);
+            int dwnld_y = render_dialog_title("Downloading...", center_y - 80, g_screen_width - 60);
 
             // Progress bar
             int bar_w = 600;
             int bar_h = 40;
             int bar_x = (g_screen_width - bar_w) / 2;
-            int bar_y = center_y - 10;
+            int bar_y = dwnld_y;
 
             // Background
             draw_rect(bar_x, bar_y, bar_w, bar_h, COLOR_DIM);
@@ -3143,8 +3359,8 @@ void ui_render_update(void) {
 
         case UPDATE_READY: {
             // Update applied successfully
-            render_text_centered("Update Ready!", center_y - 60, g_font_large, COLOR_ACCENT);
-            render_text_centered("Restart the app to use the new version.", center_y + 10, g_font_medium, COLOR_TEXT);
+            int rdy_y = render_dialog_title("Update Ready!", center_y - 60, g_screen_width - 60);
+            render_text_centered("Restart the app to use the new version.", rdy_y, g_font_medium, COLOR_TEXT);
 
             char version_text[64];
             snprintf(version_text, sizeof(version_text), "Updated to %s", info->version);
@@ -3157,11 +3373,11 @@ void ui_render_update(void) {
 
         case UPDATE_UP_TO_DATE: {
             // Already on latest version
-            render_text_centered("You're up to date!", center_y - 40, g_font_large, COLOR_ACCENT);
+            int utd_y = render_dialog_title("You're up to date!", center_y - 40, g_screen_width - 60);
 
             char version_text[64];
             snprintf(version_text, sizeof(version_text), "Version: v%s", VERSION);
-            render_text_centered(version_text, center_y + 30, g_font_medium, COLOR_DIM);
+            render_text_centered(version_text, utd_y, g_font_medium, COLOR_DIM);
 
             // Footer
             render_text(BTN_B ": OK", MARGIN, g_screen_height - SCREEN_PAD - 22, g_font_hint, COLOR_DIM);

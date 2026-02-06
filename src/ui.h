@@ -182,4 +182,9 @@ const char* ui_get_toast_message(void);
  */
 void ui_player_reset_scroll(void);
 
+/**
+ * Get number of list rows that fit on screen (dynamic based on resolution)
+ */
+int ui_get_list_visible_rows(void);
+
 #endif // UI_H
