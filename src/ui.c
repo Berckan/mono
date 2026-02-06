@@ -669,7 +669,7 @@ static int render_dialog_title(const char *text, int y, int max_width) {
 
     int x = (g_screen_width - w) / 2;
     render_text(text, x, y, font, COLOR_ACCENT);
-    return y + h + 5;   // minimal gap (font has internal padding)
+    return y + h + 20;  // balanced gap after title
 }
 
 /**
@@ -845,10 +845,10 @@ static void render_status_bar(void) {
     // WiFi + Bluetooth indicators (between volume and battery)
     bool wifi_on = sysinfo_is_wifi_connected();
     bool bt_on = sysinfo_is_bluetooth_connected();
-    render_text("W", g_screen_width - 185 - right_margin, text_y, g_font_small, wifi_on ? COLOR_ACCENT : COLOR_DIM);
-    render_text("B", g_screen_width - 155 - right_margin, text_y, g_font_small, bt_on ? COLOR_ACCENT : COLOR_DIM);
+    render_text("B", g_screen_width - 170 - right_margin, text_y, g_font_small, bt_on ? COLOR_ACCENT : COLOR_DIM);
+    render_text("W", g_screen_width - 215 - right_margin, text_y, g_font_small, wifi_on ? COLOR_ACCENT : COLOR_DIM);
 
-    // Volume indicator (to the left of battery, with more spacing) - white text
+    // Volume indicator (to the left of W/B, with consistent spacing) - white text
     char vol_str[16];
     int sys_vol = sysinfo_get_volume();
     if (sys_vol >= 0) {
@@ -856,7 +856,7 @@ static void render_status_bar(void) {
     } else {
         snprintf(vol_str, sizeof(vol_str), "Vol:--");
     }
-    render_text(vol_str, g_screen_width - 340 - right_margin, text_y, g_font_small, COLOR_TEXT);
+    render_text(vol_str, g_screen_width - 380 - right_margin, text_y, g_font_small, COLOR_TEXT);
 }
 
 int ui_init(int width, int height) {
@@ -1932,16 +1932,17 @@ void ui_render_help_browser(void) {
 
     const char *keys[] = {
         "D-Pad", "A", "B", "Y", "Select", "Start", "Start+B",
-        "---", "[..]", "*", "Orange"
+        "---", "[..]", "*", "Orange", "W", "B"
     };
     const char *descs[] = {
         "Navigate list", "Open / Play", "Go up folder",
         "Toggle favorite", "File menu (Rename/Delete)",
         "Options menu", "Exit app",
-        "Legend ---", "Parent folder", "Favorite", "Played before"
+        "Legend ---", "Parent folder", "Favorite", "Played before",
+        "WiFi connected", "Bluetooth connected"
     };
 
-    render_help_overlay("File Browser", keys, descs, 11);
+    render_help_overlay("File Browser", keys, descs, 13);
 }
 
 void ui_render_help_player(void) {
@@ -1950,16 +1951,18 @@ void ui_render_help_player(void) {
 
     const char *keys[] = {
         "A", "B", "L / R", "D-Pad L/R", "D-Pad U/D",
-        "L2", "R2", "Y", "Select", "Start", "Start+B"
+        "L2", "R2", "Y", "Select", "Start", "Start+B",
+        "---", "W", "B"
     };
     const char *descs[] = {
         "Play / Pause", "Back to browser", "Prev / Next track",
         "Seek (hold=faster)", "Volume",
         "Jump to start", "Jump near end",
-        "Toggle favorite", "Dim screen", "Options menu", "Exit app"
+        "Toggle favorite", "Dim screen", "Options menu", "Exit app",
+        "Status Bar ---", "WiFi connected", "Bluetooth connected"
     };
 
-    render_help_overlay("Now Playing", keys, descs, 11);
+    render_help_overlay("Now Playing", keys, descs, 14);
 }
 
 void ui_render_loading(const char *filename) {
@@ -3282,31 +3285,34 @@ void ui_render_update(void) {
 
         case UPDATE_AVAILABLE: {
             // Show version info and changelog
-            int avail_y = render_dialog_title("Update Available!", center_y - 140, g_screen_width - 60);
+            int avail_y = render_dialog_title("Update Available!", center_y - 180, g_screen_width - 60);
 
             // Version comparison
             char version_text[128];
+            int ver_h;
             snprintf(version_text, sizeof(version_text), "Current: v%s  ->  New: %s", VERSION, info->version);
+            TTF_SizeUTF8(g_font_medium, version_text, NULL, &ver_h);
             render_text_centered(version_text, avail_y, g_font_medium, COLOR_TEXT);
 
             // Changelog preview (first 3 lines)
+            int changelog_y = avail_y + ver_h + 30;
             if (info->changelog[0]) {
                 char changelog_preview[512];
                 strncpy(changelog_preview, info->changelog, sizeof(changelog_preview) - 1);
                 changelog_preview[sizeof(changelog_preview) - 1] = '\0';
 
-                // Find first 3 lines
                 char *line = strtok(changelog_preview, "\n");
-                int line_y = center_y - 20;
+                int line_y = changelog_y;
                 int lines = 0;
                 while (line && lines < 4) {
-                    if (line[0]) {  // Skip empty lines
+                    if (line[0]) {
                         render_text_centered(line, line_y, g_font_small, COLOR_DIM);
-                        line_y += 30;
+                        line_y += 35;
                         lines++;
                     }
                     line = strtok(NULL, "\n");
                 }
+                changelog_y = line_y;
             }
 
             // Size info
@@ -3319,7 +3325,7 @@ void ui_render_update(void) {
                     snprintf(size_text, sizeof(size_text), "Size: %.0f KB",
                              (float)info->size_bytes / 1024);
                 }
-                render_text_centered(size_text, center_y + 100, g_font_small, COLOR_DIM);
+                render_text_centered(size_text, changelog_y + 20, g_font_small, COLOR_DIM);
             }
 
             // Footer
@@ -3359,12 +3365,12 @@ void ui_render_update(void) {
 
         case UPDATE_READY: {
             // Update applied successfully
-            int rdy_y = render_dialog_title("Update Ready!", center_y - 60, g_screen_width - 60);
+            int rdy_y = render_dialog_title("Update Ready!", center_y - 80, g_screen_width - 60);
             render_text_centered("Restart the app to use the new version.", rdy_y, g_font_medium, COLOR_TEXT);
 
             char version_text[64];
             snprintf(version_text, sizeof(version_text), "Updated to %s", info->version);
-            render_text_centered(version_text, center_y + 70, g_font_medium, COLOR_DIM);
+            render_text_centered(version_text, rdy_y + 50, g_font_medium, COLOR_DIM);
 
             // Footer
             render_text(BTN_B ": OK", MARGIN, g_screen_height - SCREEN_PAD - 22, g_font_hint, COLOR_DIM);
@@ -3387,10 +3393,10 @@ void ui_render_update(void) {
         case UPDATE_ERROR: {
             // Error state
             const char *error = update_get_error();
-            render_text_centered("Update Failed", center_y - 60, g_font_large, COLOR_ERROR);
+            render_text_centered("Update Failed", center_y - 80, g_font_large, COLOR_ERROR);
 
             if (error) {
-                render_text_centered(error, center_y + 10, g_font_medium, COLOR_DIM);
+                render_text_centered(error, center_y + 20, g_font_medium, COLOR_DIM);
             }
 
             // Footer

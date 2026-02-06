@@ -24,6 +24,20 @@
 - Changed(Sysinfo): WiFi/BT connectivity detection with 5-second cache
   WHY: Avoids expensive filesystem checks on every frame while staying responsive.
 
+- Changed(UI): Resume playback dialog — responsive box sized to content
+  WHY: Fixed-size box clipped text on some screens; content-driven sizing adapts to any resolution.
+
+- Changed(UI): Consistent title-to-content spacing across all dialog screens
+  WHY: Text was cramped on update, searching, and scanning screens after previous gap changes.
+
+- Changed(UI): Status bar layout — better spacing between Vol, W, B, and battery
+  WHY: W and B indicators were too close together and overlapping with volume text.
+
+### Fixed
+
+- Fix(UI): Help overlay now documents W (WiFi) and B (Bluetooth) status indicators
+  WHY: Users couldn't tell what the W/B letters meant in the status bar.
+
 ---
 
 ## [2026.02.06] - v1.8.0
