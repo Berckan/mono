@@ -120,6 +120,10 @@ mono/
 - yt-dlp (optional, for YouTube)
 - curl (optional, for MusicBrainz)
 
+## Known Issues
+
+- **FLAC Resume**: Some FLAC files may start from the beginning instead of the saved position when resuming. This affects files without proper seek tables. MP3 files are not affected.
+
 ## License
 
 MIT License - Berckan Guerrero

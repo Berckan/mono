@@ -27,6 +27,10 @@ static int g_favorites_count = 0;
 static char g_favorites_path[512] = {0};
 static bool g_dirty = false;  // Track if changes need saving
 
+// Favorites playback mode
+static bool g_favorites_playback_mode = false;
+static int g_favorites_playback_index = 0;
+
 /**
  * Build favorites file path
  */
@@ -172,6 +176,7 @@ bool favorites_add(const char *path) {
     g_favorites[g_favorites_count][sizeof(g_favorites[0]) - 1] = '\0';
     g_favorites_count++;
     g_dirty = true;
+    favorites_save();  // Persist immediately - NextUI/MinUI kills app without cleanup
 
     printf("[FAV] Added: %s\n", path);
     return true;
@@ -188,6 +193,7 @@ bool favorites_remove(const char *path) {
             }
             g_favorites_count--;
             g_dirty = true;
+            favorites_save();  // Persist immediately - NextUI/MinUI kills app without cleanup
             printf("[FAV] Removed: %s\n", path);
             return true;
         }
@@ -267,4 +273,63 @@ bool favorites_save(void) {
     g_dirty = false;
     printf("[FAV] Saved %d favorites to %s\n", g_favorites_count, g_favorites_path);
     return true;
+}
+
+// ========================================
+// Favorites Playback Mode Implementation
+// ========================================
+
+void favorites_set_playback_mode(bool enabled, int start_index) {
+    g_favorites_playback_mode = enabled;
+    if (enabled && start_index >= 0 && start_index < g_favorites_count) {
+        g_favorites_playback_index = start_index;
+        printf("[FAV] Playback mode enabled, starting at index %d\n", start_index);
+    } else if (!enabled) {
+        g_favorites_playback_index = 0;
+        printf("[FAV] Playback mode disabled\n");
+    }
+}
+
+bool favorites_is_playback_mode(void) {
+    return g_favorites_playback_mode;
+}
+
+int favorites_advance_playback(int delta) {
+    if (!g_favorites_playback_mode || g_favorites_count == 0) {
+        return -1;
+    }
+
+    int new_index = g_favorites_playback_index + delta;
+
+    // Wrap around
+    if (new_index < 0) {
+        new_index = g_favorites_count - 1;
+    } else if (new_index >= g_favorites_count) {
+        new_index = 0;
+    }
+
+    g_favorites_playback_index = new_index;
+    printf("[FAV] Advanced to index %d: %s\n", new_index, g_favorites[new_index]);
+    return new_index;
+}
+
+const char* favorites_get_current_playback_path(void) {
+    if (!g_favorites_playback_mode || g_favorites_count == 0) {
+        return NULL;
+    }
+    if (g_favorites_playback_index < 0 || g_favorites_playback_index >= g_favorites_count) {
+        return NULL;
+    }
+    return g_favorites[g_favorites_playback_index];
+}
+
+int favorites_get_playback_index(void) {
+    return g_favorites_playback_index;
+}
+
+void favorites_set_playback_index(int index) {
+    if (index >= 0 && index < g_favorites_count) {
+        g_favorites_playback_index = index;
+        printf("[FAV] Set playback index to %d\n", index);
+    }
 }

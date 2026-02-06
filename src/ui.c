@@ -19,6 +19,7 @@
 #include "ytsearch.h"
 #include "youtube.h"
 #include "download_queue.h"
+#include "equalizer.h"
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
 #include <stdio.h>
@@ -147,6 +148,16 @@ static Uint32 g_monkey_last_update = 0;
 static char g_toast_message[128] = {0};
 static Uint32 g_toast_start_time = 0;
 #define UI_TOAST_DURATION_MS 2000
+
+// Player text scroll state (for long titles/artists)
+static int g_player_title_scroll = 0;
+static int g_player_artist_scroll = 0;
+static Uint32 g_player_scroll_last_update = 0;
+static char g_player_last_title[256] = {0};  // Detect song change
+
+#define PLAYER_SCROLL_SPEED_MS 80       // Faster than YT results
+#define PLAYER_SCROLL_PAUSE_MS 2000     // Pause at start/end
+#define PLAYER_SCROLL_GAP "   •   "     // Visual separator between repetitions
 
 // Forward declaration for toast rendering
 static void render_toast_overlay(void);
@@ -723,6 +734,252 @@ void ui_cleanup(void) {
     if (g_window) SDL_DestroyWindow(g_window);
 }
 
+// External getters from main.c for home/resume/favorites state
+extern int home_get_cursor(void);
+extern int resume_get_cursor(void);
+extern int resume_get_scroll(void);
+extern int favorites_get_cursor(void);
+extern int favorites_get_scroll(void);
+
+// Number of visible items in resume/favorites lists
+#define HOME_LIST_VISIBLE 8
+
+void ui_render_home(void) {
+    // Clear screen
+    SDL_SetRenderDrawColor(g_renderer, COLOR_BG.r, COLOR_BG.g, COLOR_BG.b, 255);
+    SDL_RenderClear(g_renderer);
+
+    // Header
+    render_text("> Mono", MARGIN, 8, g_font_medium, COLOR_TEXT);
+
+    // Status bar (volume + battery) in top right
+    render_status_bar();
+
+    // Draw header separator
+    draw_rect(0, HEADER_HEIGHT, g_screen_width, 2, COLOR_DIM);
+
+    // Get counts for display
+    int resume_count = positions_get_count();
+    int favorites_count = favorites_get_count();
+    int cursor = home_get_cursor();
+
+    // Menu items layout - responsive to screen height
+    // Available space: between header (60) and footer (50)
+    int content_height = g_screen_height - HEADER_HEIGHT - FOOTER_HEIGHT;
+    int menu_start_y = HEADER_HEIGHT + content_height / 8;  // Start ~1/8 down (higher for 4 items)
+    int item_height = content_height / 6;  // Each item takes ~1/6 of space (smaller for 4 items)
+    int box_width = g_screen_width / 3;  // 1/3 of screen width
+    int box_height = item_height - 16;  // Leave some padding
+    int box_x = (g_screen_width - box_width) / 2;
+
+    // Menu items (4 options now)
+    const char *labels[] = {"Resume", "Browse", "Favorites", "YouTube"};
+    int counts[] = {resume_count, -1, favorites_count, -1};  // -1 means no count shown
+    bool yt_available = youtube_is_available();
+
+    for (int i = 0; i < 4; i++) {
+        int y = menu_start_y + i * item_height;
+        bool is_selected = (i == cursor);
+        // Resume/Favorites disabled if empty, YouTube disabled if unavailable
+        bool is_disabled = (i == 0 && resume_count == 0) ||
+                          (i == 2 && favorites_count == 0) ||
+                          (i == 3 && !yt_available);
+
+        // Selection box
+        if (is_selected) {
+            draw_retro_box(box_x, y, box_width, box_height, 3, COLOR_HIGHLIGHT, COLOR_DIM);
+        } else {
+            draw_retro_box(box_x, y, box_width, box_height, 2, COLOR_BG, COLOR_DIM);
+        }
+
+        // Label with count
+        char display[64];
+        if (counts[i] >= 0) {
+            snprintf(display, sizeof(display), "%s (%d)", labels[i], counts[i]);
+        } else {
+            snprintf(display, sizeof(display), "%s", labels[i]);
+        }
+
+        SDL_Color color = is_disabled ? COLOR_DIM : (is_selected ? COLOR_ACCENT : COLOR_TEXT);
+        render_text_centered(display, y + (box_height / 2) - 20, g_font_medium, color);
+    }
+
+    // Dancing monkey below menu items
+    int monkey_y = menu_start_y + 4 * item_height + 10;
+    render_monkey(g_screen_width / 2 - 48, monkey_y, false);
+
+    // Footer controls
+    render_text("A: Select   Start: Options", MARGIN, g_screen_height - 40, g_font_small, COLOR_DIM);
+
+    SDL_RenderPresent(g_renderer);
+}
+
+void ui_render_resume(void) {
+    // Clear screen
+    SDL_SetRenderDrawColor(g_renderer, COLOR_BG.r, COLOR_BG.g, COLOR_BG.b, 255);
+    SDL_RenderClear(g_renderer);
+
+    // Header
+    render_text("> Resume", MARGIN, 8, g_font_medium, COLOR_TEXT);
+
+    // Status bar (volume + battery) in top right
+    render_status_bar();
+
+    // Draw header separator
+    draw_rect(0, HEADER_HEIGHT, g_screen_width, 2, COLOR_DIM);
+
+    // Get state
+    int count = positions_get_count();
+    int cursor = resume_get_cursor();
+    int scroll = resume_get_scroll();
+
+    // List
+    int y = HEADER_HEIGHT + 8;
+    int max_width = g_screen_width - MARGIN * 4;
+
+    // Color for position indicator
+    SDL_Color COLOR_POSITION = {255, 160, 0, 255};  // Orange
+
+    if (count == 0) {
+        // Empty state with monkey
+        render_text_centered("No saved positions", g_screen_height / 2 - 60, g_font_medium, COLOR_DIM);
+        render_monkey(g_screen_width / 2 - 48, g_screen_height / 2, false);
+    } else {
+        for (int i = 0; i < HOME_LIST_VISIBLE && (scroll + i) < count; i++) {
+            int idx = scroll + i;
+            bool is_selected = (idx == cursor);
+
+            // Get entry
+            char path[512];
+            int pos_sec = positions_get_entry(idx, path, sizeof(path));
+            if (pos_sec < 0) continue;
+
+            // Extract filename
+            const char *filename = strrchr(path, '/');
+            filename = filename ? filename + 1 : path;
+
+            // Selection highlight
+            if (is_selected) {
+                draw_retro_box(0, y - 6, g_screen_width, LINE_HEIGHT, 3, COLOR_HIGHLIGHT, COLOR_DIM);
+            }
+
+            // Build display text with position
+            char display[300];
+            int mins = pos_sec / 60;
+            int secs = pos_sec % 60;
+            snprintf(display, sizeof(display), "> %s", filename);
+
+            // Render filename
+            SDL_Color color = is_selected ? COLOR_ACCENT : COLOR_TEXT;
+            render_text_truncated(display, MARGIN, y, max_width - 100, g_font_medium, color);
+
+            // Render position on right side
+            char pos_str[16];
+            snprintf(pos_str, sizeof(pos_str), "[%d:%02d]", mins, secs);
+            render_text(pos_str, g_screen_width - 150, y, g_font_small, COLOR_POSITION);
+
+            y += LINE_HEIGHT;
+        }
+    }
+
+    // Footer with scroll indicator
+    if (count > HOME_LIST_VISIBLE) {
+        draw_rect(0, g_screen_height - FOOTER_HEIGHT, g_screen_width, 2, COLOR_DIM);
+
+        char scroll_info[32];
+        snprintf(scroll_info, sizeof(scroll_info), "%d/%d", cursor + 1, count);
+        render_text(scroll_info, g_screen_width - 120 - 20, g_screen_height - 40, g_font_small, COLOR_DIM);
+    }
+
+    // Controls hint
+    render_text("A:Play  Y:Remove  B:Back", MARGIN, g_screen_height - 40, g_font_small, COLOR_DIM);
+
+    SDL_RenderPresent(g_renderer);
+}
+
+void ui_render_favorites(void) {
+    // Clear screen
+    SDL_SetRenderDrawColor(g_renderer, COLOR_BG.r, COLOR_BG.g, COLOR_BG.b, 255);
+    SDL_RenderClear(g_renderer);
+
+    // Header
+    render_text("> Favorites", MARGIN, 8, g_font_medium, COLOR_TEXT);
+
+    // Status bar (volume + battery) in top right
+    render_status_bar();
+
+    // Draw header separator
+    draw_rect(0, HEADER_HEIGHT, g_screen_width, 2, COLOR_DIM);
+
+    // Get state
+    int count = favorites_get_count();
+    int cursor = favorites_get_cursor();
+    int scroll = favorites_get_scroll();
+
+    // List
+    int y = HEADER_HEIGHT + 8;
+    int max_width = g_screen_width - MARGIN * 4;
+
+    if (count == 0) {
+        // Empty state with monkey
+        render_text_centered("No favorites yet", g_screen_height / 2 - 60, g_font_medium, COLOR_DIM);
+        render_monkey(g_screen_width / 2 - 48, g_screen_height / 2, false);
+    } else {
+        for (int i = 0; i < HOME_LIST_VISIBLE && (scroll + i) < count; i++) {
+            int idx = scroll + i;
+            bool is_selected = (idx == cursor);
+
+            // Get entry
+            const char *path = favorites_get_path(idx);
+            if (!path) continue;
+
+            // Extract filename
+            const char *filename = strrchr(path, '/');
+            filename = filename ? filename + 1 : path;
+
+            // Check if has saved position
+            int pos_sec = positions_get(path);
+
+            // Selection highlight
+            if (is_selected) {
+                draw_retro_box(0, y - 6, g_screen_width, LINE_HEIGHT, 3, COLOR_HIGHLIGHT, COLOR_DIM);
+            }
+
+            // Build display text
+            char display[300];
+            snprintf(display, sizeof(display), "* %s", filename);
+
+            // Render filename
+            SDL_Color color = is_selected ? COLOR_ACCENT : COLOR_TEXT;
+            render_text_truncated(display, MARGIN, y, max_width - 100, g_font_medium, color);
+
+            // Render position if available
+            if (pos_sec > 0) {
+                SDL_Color COLOR_POSITION = {255, 160, 0, 255};
+                char pos_str[16];
+                snprintf(pos_str, sizeof(pos_str), "[%d:%02d]", pos_sec / 60, pos_sec % 60);
+                render_text(pos_str, g_screen_width - 150, y, g_font_small, COLOR_POSITION);
+            }
+
+            y += LINE_HEIGHT;
+        }
+    }
+
+    // Footer with scroll indicator
+    if (count > HOME_LIST_VISIBLE) {
+        draw_rect(0, g_screen_height - FOOTER_HEIGHT, g_screen_width, 2, COLOR_DIM);
+
+        char scroll_info[32];
+        snprintf(scroll_info, sizeof(scroll_info), "%d/%d", cursor + 1, count);
+        render_text(scroll_info, g_screen_width - 120 - 20, g_screen_height - 40, g_font_small, COLOR_DIM);
+    }
+
+    // Controls hint
+    render_text("A:Play  Y:Remove  B:Back", MARGIN, g_screen_height - 40, g_font_small, COLOR_DIM);
+
+    SDL_RenderPresent(g_renderer);
+}
+
 void ui_render_browser(void) {
     // Periodically expire old cache entries
     static Uint32 last_cache_expire = 0;
@@ -749,7 +1006,7 @@ void ui_render_browser(void) {
         } else {
             snprintf(dl_str, sizeof(dl_str), "DL:(%d)", pending);
         }
-        render_text(dl_str, MARGIN + 180, 16, g_font_small, COLOR_ACCENT);
+        render_text(dl_str, MARGIN + 250, 16, g_font_small, COLOR_ACCENT);
     }
 
     // Status bar (volume + battery) in top right
@@ -830,7 +1087,11 @@ void ui_render_browser(void) {
     }
 
     // Controls hint
-    render_text("A:Select  Y:Fav  B:Up  Start:Menu", MARGIN, g_screen_height - 40, g_font_small, COLOR_DIM);
+#ifdef __APPLE__
+    render_text("A:Open  Y:Fav  B:Up  H:Help", MARGIN, g_screen_height - 40, g_font_small, COLOR_DIM);
+#else
+    render_text("A:Open  Y:Fav  B:Up  X:Help", MARGIN, g_screen_height - 40, g_font_small, COLOR_DIM);
+#endif
 
     SDL_RenderPresent(g_renderer);
 }
@@ -843,6 +1104,94 @@ static void render_cover_overlay(void) {
     SDL_SetRenderDrawColor(g_renderer, 0, 0, 0, 153);  // 0.6 opacity = 153/255
     SDL_Rect overlay = {0, 0, g_screen_width, g_screen_height};
     SDL_RenderFillRect(g_renderer, &overlay);
+}
+
+/**
+ * Render text with horizontal scroll if it exceeds max_width
+ * @param text The text to render
+ * @param y Y position
+ * @param max_width Maximum width in pixels before scrolling
+ * @param font Font to use
+ * @param color Text color
+ * @param scroll_offset Pointer to scroll state variable
+ * @param has_shadow Whether to render with shadow (for cover bg)
+ */
+static void render_scrolling_text_centered(const char *text, int y, int max_width,
+                                           TTF_Font *font, SDL_Color color,
+                                           int *scroll_offset, bool has_shadow) {
+    if (!text || !text[0]) return;
+
+    int text_width, text_height;
+    TTF_SizeUTF8(font, text, &text_width, &text_height);
+
+    if (text_width <= max_width) {
+        // Fits on screen - render centered normally
+        if (has_shadow) {
+            render_text_centered_shadow(text, y, font, color);
+        } else {
+            render_text_centered(text, y, font, color);
+        }
+        *scroll_offset = 0;
+        return;
+    }
+
+    // Text is too long - scroll horizontally
+    Uint32 now = SDL_GetTicks();
+    if (now > g_player_scroll_last_update &&
+        now - g_player_scroll_last_update > PLAYER_SCROLL_SPEED_MS) {
+        (*scroll_offset)++;
+        g_player_scroll_last_update = now;
+    }
+
+    // Create extended text with gap for seamless loop
+    char extended[512];
+    snprintf(extended, sizeof(extended), "%s%s%s", text, PLAYER_SCROLL_GAP, text);
+
+    int gap_len = strlen(PLAYER_SCROLL_GAP);
+    int text_len = strlen(text);
+    int cycle_len = text_len + gap_len;
+
+    // Reset at end of cycle (with pause)
+    if (*scroll_offset >= cycle_len) {
+        *scroll_offset = 0;
+        g_player_scroll_last_update = now + PLAYER_SCROLL_PAUSE_MS;
+    }
+
+    // Calculate visible portion based on character offset
+    // Use byte-safe substring starting at scroll_offset
+    int start = *scroll_offset;
+    if (start >= (int)strlen(extended)) start = 0;
+
+    // Find how many chars fit in max_width
+    char visible[256];
+    int visible_len = 0;
+    const char *src = extended + start;
+
+    while (*src && visible_len < (int)sizeof(visible) - 1) {
+        // Add one character at a time and check width
+        visible[visible_len] = *src;
+        visible[visible_len + 1] = '\0';
+
+        int new_width;
+        TTF_SizeUTF8(font, visible, &new_width, NULL);
+
+        if (new_width > max_width) {
+            // This char would overflow - stop here
+            visible[visible_len] = '\0';
+            break;
+        }
+
+        visible_len++;
+        src++;
+    }
+
+    // Render left-aligned with margin (scroll effect)
+    int x = MARGIN;
+    if (has_shadow) {
+        render_text_shadow(visible, x, y, font, color);
+    } else {
+        render_text(visible, x, y, font, color);
+    }
 }
 
 // Internal: renders player content without SDL_RenderPresent
@@ -914,11 +1263,22 @@ static void ui_render_player_content(void) {
 
     // Favorite indicator if current track is a favorite
     const char *current_path = browser_get_selected_path();
+    int fav_indicator_x = 220;
     if (current_path && favorites_is_favorite(current_path)) {
         if (has_cover_bg) {
-            render_text_shadow("*", 220, 8, g_font_medium, cover_accent);
+            render_text_shadow("*", fav_indicator_x, 8, g_font_medium, cover_accent);
         } else {
-            render_text("*", 220, 8, g_font_medium, COLOR_ACCENT);
+            render_text("*", fav_indicator_x, 8, g_font_medium, COLOR_ACCENT);
+        }
+        fav_indicator_x += 24;
+    }
+
+    // Favorites playback mode indicator (shows that NEXT/PREV navigates favorites)
+    if (favorites_is_playback_mode()) {
+        if (has_cover_bg) {
+            render_text_shadow("[FAV]", fav_indicator_x, 8, g_font_small, cover_accent);
+        } else {
+            render_text("[FAV]", fav_indicator_x, 8, g_font_small, COLOR_ACCENT);
         }
     }
 
@@ -951,15 +1311,33 @@ static void ui_render_player_content(void) {
     // Now Playing section - centered layout when cover is background
     int center_y = has_cover_bg ? 220 : 150;
 
-    // Title and Artist (with shadow when cover background)
+    // Detect song change and reset scroll
+    if (strcmp(info->title, g_player_last_title) != 0) {
+        g_player_title_scroll = 0;
+        g_player_artist_scroll = 0;
+        g_player_scroll_last_update = SDL_GetTicks() + PLAYER_SCROLL_PAUSE_MS;
+        strncpy(g_player_last_title, info->title, sizeof(g_player_last_title) - 1);
+        g_player_last_title[sizeof(g_player_last_title) - 1] = '\0';
+    }
+
+    // Max width for title/artist (screen width minus margins)
+    int max_text_width = g_screen_width - MARGIN * 2;
+
+    // Title and Artist (with scroll for long text, shadow when cover bg)
     if (has_cover_bg) {
-        // Centered layout with cover as background + text shadow
-        render_text_centered_shadow(info->title, center_y, g_font_large, cover_text);
-        render_text_centered_shadow(info->artist, center_y + 90, g_font_medium, cover_text);
+        render_scrolling_text_centered(info->title, center_y, max_text_width,
+                                       g_font_large, cover_text,
+                                       &g_player_title_scroll, true);
+        render_scrolling_text_centered(info->artist, center_y + 90, max_text_width,
+                                       g_font_medium, cover_text,
+                                       &g_player_artist_scroll, true);
     } else {
-        // Original layout without cover
-        render_text_centered(info->title, center_y, g_font_large, COLOR_TEXT);
-        render_text_centered(info->artist, center_y + 90, g_font_medium, COLOR_DIM);
+        render_scrolling_text_centered(info->title, center_y, max_text_width,
+                                       g_font_large, COLOR_TEXT,
+                                       &g_player_title_scroll, false);
+        render_scrolling_text_centered(info->artist, center_y + 90, max_text_width,
+                                       g_font_medium, COLOR_DIM,
+                                       &g_player_artist_scroll, false);
     }
 
     // Play/Pause indicator (use adaptive accent color)
@@ -1068,8 +1446,17 @@ void ui_render_player(void) {
 }
 
 void ui_render_menu(void) {
-    // Render player underneath (without presenting yet)
-    ui_render_player_content();
+    // Render appropriate background based on menu mode
+    // Player content behind when opened from player, solid bg otherwise
+    int item_count = menu_get_item_count();
+    if (item_count == 4) {
+        // Player mode - render player underneath
+        ui_render_player_content();
+    } else {
+        // Browser/Home mode - solid background
+        SDL_SetRenderDrawColor(g_renderer, COLOR_BG.r, COLOR_BG.g, COLOR_BG.b, 255);
+        SDL_RenderClear(g_renderer);
+    }
 
     // Darken overlay
     SDL_SetRenderDrawBlendMode(g_renderer, SDL_BLENDMODE_BLEND);
@@ -1077,9 +1464,12 @@ void ui_render_menu(void) {
     SDL_Rect overlay = {0, 0, g_screen_width, g_screen_height};
     SDL_RenderFillRect(g_renderer, &overlay);
 
-    // Menu box (compact for 720p)
+    // Menu box - height adapts to item count
     int menu_w = 500;
-    int menu_h = 470;  // Height for 7 items (Shuffle, Repeat, Sleep, Power, Theme, YouTube, Exit)
+    int item_h = 46;
+    int title_space = 80;
+    int footer_space = 50;
+    int menu_h = title_space + (item_count * item_h) + footer_space;
     int menu_x = (g_screen_width - menu_w) / 2;
     int menu_y = (g_screen_height - menu_h) / 2;
 
@@ -1089,87 +1479,129 @@ void ui_render_menu(void) {
     // Menu title
     render_text_centered("Options", menu_y + 20, g_font_medium, COLOR_TEXT);
 
-    // Menu items (with spacing after title)
+    // Menu items (dynamic from menu system)
     int cursor = menu_get_cursor();
-    int item_y = menu_y + 90;
-    int item_h = 50;
-    char buf[64];
+    int item_y = menu_y + title_space;
 
-    // Shuffle
-    snprintf(buf, sizeof(buf), "Shuffle: %s", menu_is_shuffle_enabled() ? "On" : "Off");
-    if (cursor == MENU_SHUFFLE) {
-        draw_rect(menu_x + 16, item_y - 4, menu_w - 32, item_h, COLOR_ACCENT);
-        render_text(buf, menu_x + 32, item_y, g_font_small, COLOR_BG);
-    } else {
-        render_text(buf, menu_x + 32, item_y, g_font_small, COLOR_DIM);
-    }
-    item_y += item_h;
-
-    // Repeat
-    snprintf(buf, sizeof(buf), "Repeat: %s", menu_get_repeat_string());
-    if (cursor == MENU_REPEAT) {
-        draw_rect(menu_x + 16, item_y - 4, menu_w - 32, item_h, COLOR_ACCENT);
-        render_text(buf, menu_x + 32, item_y, g_font_small, COLOR_BG);
-    } else {
-        render_text(buf, menu_x + 32, item_y, g_font_small, COLOR_DIM);
-    }
-    item_y += item_h;
-
-    // Sleep Timer
-    snprintf(buf, sizeof(buf), "Sleep: %s", menu_get_sleep_string());
-    if (cursor == MENU_SLEEP) {
-        draw_rect(menu_x + 16, item_y - 4, menu_w - 32, item_h, COLOR_ACCENT);
-        render_text(buf, menu_x + 32, item_y, g_font_small, COLOR_BG);
-    } else {
-        render_text(buf, menu_x + 32, item_y, g_font_small, COLOR_DIM);
-    }
-    item_y += item_h;
-
-    // Power Mode
-    snprintf(buf, sizeof(buf), "Power: %s", menu_get_power_string());
-    if (cursor == MENU_POWER) {
-        draw_rect(menu_x + 16, item_y - 4, menu_w - 32, item_h, COLOR_ACCENT);
-        render_text(buf, menu_x + 32, item_y, g_font_small, COLOR_BG);
-    } else {
-        render_text(buf, menu_x + 32, item_y, g_font_small, COLOR_DIM);
-    }
-    item_y += item_h;
-
-    // Theme
-    snprintf(buf, sizeof(buf), "Theme: %s", theme_get_current_name());
-    if (cursor == MENU_THEME) {
-        draw_rect(menu_x + 16, item_y - 4, menu_w - 32, item_h, COLOR_ACCENT);
-        render_text(buf, menu_x + 32, item_y, g_font_small, COLOR_BG);
-    } else {
-        render_text(buf, menu_x + 32, item_y, g_font_small, COLOR_DIM);
-    }
-    item_y += item_h;
-
-    // YouTube (show availability status)
-    if (youtube_is_available()) {
-        snprintf(buf, sizeof(buf), "YouTube Search");
-    } else {
-        snprintf(buf, sizeof(buf), "YouTube (unavailable)");
-    }
-    if (cursor == MENU_YOUTUBE) {
-        draw_rect(menu_x + 16, item_y - 4, menu_w - 32, item_h, COLOR_ACCENT);
-        render_text(buf, menu_x + 32, item_y, g_font_small, COLOR_BG);
-    } else {
-        render_text(buf, menu_x + 32, item_y, g_font_small,
-                   youtube_is_available() ? COLOR_DIM : COLOR_ERROR);
-    }
-    item_y += item_h;
-
-    // Close
-    if (cursor == MENU_EXIT) {
-        draw_rect(menu_x + 16, item_y - 4, menu_w - 32, item_h, COLOR_ACCENT);
-        render_text("Close", menu_x + 32, item_y, g_font_small, COLOR_BG);
-    } else {
-        render_text("Close", menu_x + 32, item_y, g_font_small, COLOR_DIM);
+    for (int i = 0; i < item_count; i++) {
+        const char *label = menu_get_item_label(i);
+        if (cursor == i) {
+            draw_rect(menu_x + 16, item_y - 4, menu_w - 32, item_h, COLOR_ACCENT);
+            render_text(label, menu_x + 32, item_y, g_font_small, COLOR_BG);
+        } else {
+            render_text(label, menu_x + 32, item_y, g_font_small, COLOR_DIM);
+        }
+        item_y += item_h;
     }
 
     // Controls hint
     render_text_centered("A:Select  B:Close", menu_y + menu_h - 40, g_font_small, COLOR_DIM);
+
+    SDL_RenderPresent(g_renderer);
+}
+
+// External: EQ band selection from main.c
+extern int eq_get_selected_band(void);
+
+void ui_render_equalizer(void) {
+    // Render player underneath (EQ only accessible from player menu)
+    ui_render_player_content();
+
+    // Darken overlay
+    SDL_SetRenderDrawBlendMode(g_renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(g_renderer, 0, 0, 0, 200);
+    SDL_Rect overlay = {0, 0, g_screen_width, g_screen_height};
+    SDL_RenderFillRect(g_renderer, &overlay);
+
+    // EQ box dimensions
+    int box_w = 700;
+    int box_h = 340;
+    int box_x = (g_screen_width - box_w) / 2;
+    int box_y = (g_screen_height - box_h) / 2;
+
+    draw_retro_box(box_x, box_y, box_w, box_h, 4, COLOR_HIGHLIGHT, COLOR_TEXT);
+
+    // Title
+    render_text_centered("Equalizer", box_y + 20, g_font_medium, COLOR_TEXT);
+
+    // Band layout
+    int selected = eq_get_selected_band();
+    int bar_max_w = 400;
+    int bar_h = 28;
+    int label_x = box_x + 40;
+    int bar_x = box_x + 170;
+    int db_x = bar_x + bar_max_w + 16;
+
+    // Bass band (y position)
+    int bass_y = box_y + 100;
+    int bass_db = eq_get_bass();
+    float bass_fill = (float)(bass_db + 12) / 24.0f;  // 0.0 to 1.0
+    int bass_fill_w = (int)(bass_fill * bar_max_w);
+
+    SDL_Color bass_label_color = (selected == 0) ? COLOR_TEXT : COLOR_DIM;
+    SDL_Color bass_bar_color = (selected == 0) ? COLOR_ACCENT : COLOR_DIM;
+
+    render_text("Bass", label_x, bass_y, g_font_small, bass_label_color);
+
+    // Bar background (empty)
+    SDL_SetRenderDrawColor(g_renderer, COLOR_DIM.r, COLOR_DIM.g, COLOR_DIM.b, 80);
+    SDL_SetRenderDrawBlendMode(g_renderer, SDL_BLENDMODE_BLEND);
+    SDL_Rect bar_bg = {bar_x, bass_y + 4, bar_max_w, bar_h};
+    SDL_RenderFillRect(g_renderer, &bar_bg);
+
+    // Bar fill
+    if (bass_fill_w > 0) {
+        SDL_SetRenderDrawColor(g_renderer, bass_bar_color.r, bass_bar_color.g, bass_bar_color.b, 255);
+        SDL_SetRenderDrawBlendMode(g_renderer, SDL_BLENDMODE_NONE);
+        SDL_Rect bar_fill = {bar_x, bass_y + 4, bass_fill_w, bar_h};
+        SDL_RenderFillRect(g_renderer, &bar_fill);
+    }
+
+    // Bar outline
+    SDL_SetRenderDrawColor(g_renderer, bass_label_color.r, bass_label_color.g, bass_label_color.b, 255);
+    SDL_SetRenderDrawBlendMode(g_renderer, SDL_BLENDMODE_NONE);
+    SDL_RenderDrawRect(g_renderer, &bar_bg);
+
+    // dB value
+    render_text(eq_get_bass_string(), db_x, bass_y, g_font_small, bass_label_color);
+
+    // Treble band
+    int treble_y = bass_y + 80;
+    int treble_db = eq_get_treble();
+    float treble_fill = (float)(treble_db + 12) / 24.0f;
+    int treble_fill_w = (int)(treble_fill * bar_max_w);
+
+    SDL_Color treble_label_color = (selected == 1) ? COLOR_TEXT : COLOR_DIM;
+    SDL_Color treble_bar_color = (selected == 1) ? COLOR_ACCENT : COLOR_DIM;
+
+    render_text("Treble", label_x, treble_y, g_font_small, treble_label_color);
+
+    // Bar background
+    SDL_SetRenderDrawColor(g_renderer, COLOR_DIM.r, COLOR_DIM.g, COLOR_DIM.b, 80);
+    SDL_SetRenderDrawBlendMode(g_renderer, SDL_BLENDMODE_BLEND);
+    SDL_Rect treble_bar_bg = {bar_x, treble_y + 4, bar_max_w, bar_h};
+    SDL_RenderFillRect(g_renderer, &treble_bar_bg);
+
+    // Bar fill
+    if (treble_fill_w > 0) {
+        SDL_SetRenderDrawColor(g_renderer, treble_bar_color.r, treble_bar_color.g, treble_bar_color.b, 255);
+        SDL_SetRenderDrawBlendMode(g_renderer, SDL_BLENDMODE_NONE);
+        SDL_Rect treble_fill_rect = {bar_x, treble_y + 4, treble_fill_w, bar_h};
+        SDL_RenderFillRect(g_renderer, &treble_fill_rect);
+    }
+
+    // Bar outline
+    SDL_SetRenderDrawColor(g_renderer, treble_label_color.r, treble_label_color.g, treble_label_color.b, 255);
+    SDL_SetRenderDrawBlendMode(g_renderer, SDL_BLENDMODE_NONE);
+    SDL_RenderDrawRect(g_renderer, &treble_bar_bg);
+
+    // dB value
+    render_text(eq_get_treble_string(), db_x, treble_y, g_font_small, treble_label_color);
+
+    // Footer hints
+    render_text("A:Reset", box_x + 40, box_y + box_h - 44, g_font_small, COLOR_DIM);
+    // Right-align "B:Back"
+    render_text("B:Back", box_x + box_w - 160, box_y + box_h - 44, g_font_small, COLOR_DIM);
 
     SDL_RenderPresent(g_renderer);
 }
@@ -1248,13 +1680,15 @@ void ui_render_help_player(void) {
         "L / R      Prev / Next track",
         "D-Pad L/R  Seek (hold=faster)",
         "D-Pad U/D  Volume",
+        "L2         Jump to start",
+        "R2         Jump near end",
         "Y          Toggle favorite",
         "Select     Dim screen",
         "Start      Options menu",
         "Start+B    Exit app"
     };
 
-    render_help_overlay("Now Playing", lines, 9);
+    render_help_overlay("Now Playing", lines, 11);
 }
 
 void ui_render_loading(const char *filename) {
@@ -1491,6 +1925,44 @@ void ui_render_confirm_delete(void) {
     SDL_RenderPresent(g_renderer);
 }
 
+void ui_render_resume_prompt(int saved_pos) {
+    // Clear screen completely (don't rely on previous render)
+    SDL_SetRenderDrawBlendMode(g_renderer, SDL_BLENDMODE_NONE);
+    SDL_SetRenderDrawColor(g_renderer, COLOR_BG.r, COLOR_BG.g, COLOR_BG.b, 255);
+    SDL_RenderClear(g_renderer);
+
+    // Dark background overlay
+    SDL_SetRenderDrawBlendMode(g_renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(g_renderer, 0, 0, 0, 180);
+    SDL_Rect overlay = {0, 0, g_screen_width, g_screen_height};
+    SDL_RenderFillRect(g_renderer, &overlay);
+
+    // Calculate box size
+    int box_w = 650;
+    int box_h = 220;
+    int box_x = (g_screen_width - box_w) / 2;
+    int box_y = (g_screen_height - box_h) / 2;
+
+    draw_rect(box_x, box_y, box_w, box_h, COLOR_HIGHLIGHT);
+
+    // Title
+    render_text_centered("Resume Playback?", box_y + 30, g_font_large, COLOR_ACCENT);
+
+    // Format saved position as MM:SS
+    int mins = saved_pos / 60;
+    int secs = saved_pos % 60;
+    char position_text[64];
+    snprintf(position_text, sizeof(position_text), "Continue from %d:%02d", mins, secs);
+    render_text_centered(position_text, box_y + 100, g_font_medium, COLOR_TEXT);
+
+    // Controls hint
+    render_text_centered("A:Resume  B:Start Over", box_y + box_h - 50, g_font_small, COLOR_DIM);
+
+    // Reset blend mode and present
+    SDL_SetRenderDrawBlendMode(g_renderer, SDL_BLENDMODE_NONE);
+    SDL_RenderPresent(g_renderer);
+}
+
 void ui_render_rename(void) {
     // Clear screen
     SDL_SetRenderDrawColor(g_renderer, COLOR_BG.r, COLOR_BG.g, COLOR_BG.b, 255);
@@ -1560,8 +2032,8 @@ void ui_render_rename(void) {
 
     // Controls
     int ctrl_y = g_screen_height - 80;
-    render_text_centered("D-Pad: Select   A: Insert   Y: Delete", ctrl_y, g_font_small, COLOR_DIM);
-    render_text_centered("Start: Confirm   B: Cancel", ctrl_y + 35, g_font_small, COLOR_DIM);
+    render_text_centered("D-Pad: Move   A: Insert   B: Delete", ctrl_y, g_font_small, COLOR_DIM);
+    render_text_centered("Start: Confirm   Select: Cancel", ctrl_y + 35, g_font_small, COLOR_DIM);
 
     SDL_RenderPresent(g_renderer);
 }
@@ -1677,8 +2149,8 @@ void ui_render_youtube_search(void) {
 
     // Controls
     int ctrl_y = g_screen_height - 100;
-    render_text_centered("D-Pad: Select   A: Insert   Y: Delete", ctrl_y, g_font_small, COLOR_DIM);
-    render_text_centered("Start: Search   B: Cancel", ctrl_y + 30, g_font_small, COLOR_DIM);
+    render_text_centered("D-Pad: Move   A: Insert   B: Delete", ctrl_y, g_font_small, COLOR_DIM);
+    render_text_centered("Start: Search   Select: Cancel", ctrl_y + 30, g_font_small, COLOR_DIM);
 
     SDL_RenderPresent(g_renderer);
 }
@@ -2102,4 +2574,11 @@ bool ui_toast_active(void) {
 
 const char* ui_get_toast_message(void) {
     return g_toast_message[0] ? g_toast_message : NULL;
+}
+
+void ui_player_reset_scroll(void) {
+    g_player_title_scroll = 0;
+    g_player_artist_scroll = 0;
+    g_player_scroll_last_update = SDL_GetTicks() + PLAYER_SCROLL_PAUSE_MS;
+    g_player_last_title[0] = '\0';
 }

@@ -36,6 +36,8 @@
 #include "youtube.h"
 #include "ytsearch.h"
 #include "download_queue.h"
+#include "equalizer.h"
+#include "preload.h"
 
 // Screen dimensions (auto-detected at runtime)
 static int g_screen_width = 1280;   // Fallback
@@ -43,6 +45,9 @@ static int g_screen_height = 720;   // Fallback
 
 // Application states
 typedef enum {
+    STATE_HOME,         // Home menu (Resume, Browse, Favorites)
+    STATE_RESUME,       // Resume list (tracks with saved positions)
+    STATE_FAVORITES,    // Favorites list
     STATE_BROWSER,
     STATE_LOADING,      // Loading a file
     STATE_PLAYING,
@@ -58,14 +63,29 @@ typedef enum {
     STATE_YOUTUBE_RESULTS,  // YouTube results list
     STATE_YOUTUBE_DOWNLOAD, // YouTube download progress
     STATE_DOWNLOAD_QUEUE,   // Download queue list view
-    STATE_ERROR         // Error loading file
+    STATE_SEEKING,      // Seeking in FLAC file (shows loading)
+    STATE_EQUALIZER,    // Equalizer screen (bass/treble horizontal bars)
+    STATE_ERROR,        // Error loading file
+    STATE_RESUME_PROMPT // Ask user if they want to resume from saved position
 } AppState;
 
 // Global state
 static bool g_running = true;
-static AppState g_state = STATE_BROWSER;
+static AppState g_state = STATE_HOME;  // Start at home menu
 static char g_error_message[256] = {0};  // Last error message
 static char g_loading_file[256] = {0};   // File being loaded
+
+// Home menu state
+typedef enum { HOME_RESUME, HOME_BROWSE, HOME_FAVORITES, HOME_YOUTUBE, HOME_COUNT } HomeItem;
+static int g_home_cursor = HOME_BROWSE;  // Default to Browse
+
+// Resume list state
+static int g_resume_cursor = 0;
+static int g_resume_scroll = 0;
+
+// Favorites list state
+static int g_favorites_cursor = 0;
+static int g_favorites_scroll = 0;
 
 // Metadata scanning state
 static char g_scan_folder[512] = {0};
@@ -78,8 +98,30 @@ static bool g_scan_cancelled = false;
 // Currently playing track path (for state persistence)
 static char g_current_track_path[512] = {0};
 
+// Seek target for STATE_SEEKING (-1 = none)
+static int g_seek_target = -1;
+
+// Pending resume prompt state
+static int g_pending_resume_pos = 0;  // Saved position to resume from
+
+// Equalizer band selection (0-4)
+static int g_eq_band = 0;
+
 // Joystick for input (raw joystick API - Trimui has incorrect Game Controller mapping)
 static SDL_Joystick *g_joystick = NULL;
+
+// Visible rows for resume/favorites lists
+#define LIST_VISIBLE_ROWS 8
+
+/**
+ * Getters for home/resume/favorites state (used by UI)
+ */
+int home_get_cursor(void) { return g_home_cursor; }
+int resume_get_cursor(void) { return g_resume_cursor; }
+int resume_get_scroll(void) { return g_resume_scroll; }
+int favorites_get_cursor(void) { return g_favorites_cursor; }
+int favorites_get_scroll(void) { return g_favorites_scroll; }
+int eq_get_selected_band(void) { return g_eq_band; }
 
 /**
  * Render callback for YouTube download progress
@@ -119,6 +161,9 @@ static int init_sdl(void) {
     } else {
         printf("No joystick found, using keyboard\n");
     }
+
+    // Initialize input system (opens power button device on Linux)
+    input_init();
 
     // Initialize SDL_ttf for font rendering
     if (TTF_Init() < 0) {
@@ -167,11 +212,28 @@ static bool play_file(const char *path) {
     filename = filename ? filename + 1 : path;
     strncpy(g_loading_file, filename, sizeof(g_loading_file) - 1);
 
-    // Load new file
-    if (!audio_load(path)) {
-        // Store error message
-        snprintf(g_error_message, sizeof(g_error_message), "Cannot play: %s", filename);
-        return false;
+    // Check if we have preloaded data for this track (gapless playback)
+    PreloadedTrack *preloaded = preload_consume(path);
+    bool loaded = false;
+
+    if (preloaded && preloaded->is_flac && preloaded->wav_data) {
+        // Use preloaded FLAC data for instant transition
+        loaded = audio_load_preloaded(path, preloaded->wav_data, preloaded->wav_size,
+                                       preloaded->duration_sec);
+        if (loaded) {
+            // wav_data ownership transferred, only free struct
+            preloaded->wav_data = NULL;
+            printf("[GAPLESS] Used preloaded data for: %s\n", filename);
+        }
+        preload_free_track(preloaded);
+    }
+
+    if (!loaded) {
+        // Normal load (no preload or preload failed)
+        if (!audio_load(path)) {
+            snprintf(g_error_message, sizeof(g_error_message), "Cannot play: %s", filename);
+            return false;
+        }
     }
 
     // Update current track path
@@ -183,14 +245,20 @@ static bool play_file(const char *path) {
         cover_load(dir);
     }
 
-    // Check for saved position
+    // Check for saved position - don't auto-seek, let user decide
     int saved_pos = positions_get(path);
-    if (saved_pos > 0) {
+    g_pending_resume_pos = saved_pos;  // Store for resume prompt (0 = no saved position)
+
+    // Only start playback if no saved position (otherwise wait for user prompt response)
+    if (saved_pos <= 0) {
         audio_play();
-        audio_seek(saved_pos);
-        printf("[MAIN] Resumed %s at %d seconds\n", path, saved_pos);
-    } else {
-        audio_play();
+    }
+    // If saved_pos > 0, playback starts in STATE_RESUME_PROMPT handler
+
+    // Start preloading next track for gapless playback
+    const char *next_path = browser_get_next_track_path();
+    if (next_path) {
+        preload_start(next_path);
     }
 
     return true;
@@ -229,6 +297,9 @@ static void save_app_state(void) {
     state_data.repeat = menu_get_repeat_mode();
     state_data.theme = theme_get_current();
     state_data.power_mode = menu_get_power_mode();
+    for (int i = 0; i < EQ_BAND_COUNT; i++) {
+        state_data.eq_bands[i] = eq_get_band_db(i);
+    }
 
     // Was playing?
     state_data.was_playing = audio_is_playing() || audio_is_paused();
@@ -253,9 +324,13 @@ static void cleanup(void) {
     metadata_cleanup();
     dlqueue_shutdown();
     youtube_cleanup();
+    preload_cleanup();
+    eq_cleanup();
     audio_cleanup();
     ui_cleanup();
     browser_cleanup();
+
+    input_cleanup();
 
     if (g_joystick) {
         SDL_JoystickClose(g_joystick);
@@ -296,6 +371,16 @@ static void handle_input(AppState *state) {
         }
     }
 
+    // Poll power button (reads from /dev/input/event1 on Linux)
+    InputAction power_action = input_poll_power();
+    if (power_action == INPUT_SUSPEND) {
+        bool was_playing = audio_is_playing();
+        if (was_playing) audio_toggle_pause();
+        screen_system_suspend();
+        input_drain_power();  // Clear accumulated events after wake
+        if (was_playing) audio_toggle_pause();
+    }
+
     while (SDL_PollEvent(&event)) {
         if (event.type == SDL_QUIT) {
             g_running = false;
@@ -308,6 +393,15 @@ static void handle_input(AppState *state) {
         if (action == INPUT_EXIT) {
             g_running = false;
             return;
+        }
+
+        // Global suspend handler (power button)
+        if (action == INPUT_SUSPEND) {
+            bool was_playing = audio_is_playing();
+            if (was_playing) audio_toggle_pause();
+            screen_system_suspend();
+            if (was_playing) audio_toggle_pause();
+            continue;
         }
 
         // Help overlay dismissal (X or H to close, like menu)
@@ -338,7 +432,7 @@ static void handle_input(AppState *state) {
             if (action == INPUT_SELECT) {
                 FileMenuResult result = filemenu_confirm_delete(true);
                 if (result == FILEMENU_RESULT_DELETED) {
-                    browser_navigate_to(browser_get_current_path());
+                    browser_rescan_preserve_cursor();
                 }
                 *state = STATE_BROWSER;
             } else if (action == INPUT_BACK) {
@@ -346,6 +440,225 @@ static void handle_input(AppState *state) {
                 *state = STATE_FILE_MENU;  // Back to file menu
             }
             continue;  // Don't process other actions in confirm
+        }
+
+        // Resume prompt handling (ask user before seeking to saved position)
+        if (*state == STATE_RESUME_PROMPT) {
+            if (action == INPUT_SELECT) {
+                // A = Resume from saved position
+                // Use STATE_SEEKING to do the seek after a frame (timing issues on Trimui)
+                audio_play();
+                g_seek_target = g_pending_resume_pos;
+                g_pending_resume_pos = 0;
+                *state = STATE_SEEKING;  // Will show "Seeking..." and do seek next frame
+            } else if (action == INPUT_BACK) {
+                // B = Start from beginning
+                audio_play();
+                g_pending_resume_pos = 0;
+                *state = STATE_PLAYING;
+            }
+            continue;
+        }
+
+        // Home menu handling
+        if (*state == STATE_HOME) {
+            switch (action) {
+                case INPUT_UP:
+                    g_home_cursor = (g_home_cursor + HOME_COUNT - 1) % HOME_COUNT;
+                    break;
+                case INPUT_DOWN:
+                    g_home_cursor = (g_home_cursor + 1) % HOME_COUNT;
+                    break;
+                case INPUT_SELECT:
+                    switch (g_home_cursor) {
+                        case HOME_RESUME:
+                            if (positions_get_count() > 0) {
+                                g_resume_cursor = 0;
+                                g_resume_scroll = 0;
+                                *state = STATE_RESUME;
+                            }
+                            break;
+                        case HOME_BROWSE:
+                            *state = STATE_BROWSER;
+                            break;
+                        case HOME_FAVORITES:
+                            if (favorites_get_count() > 0) {
+                                g_favorites_cursor = 0;
+                                g_favorites_scroll = 0;
+                                *state = STATE_FAVORITES;
+                            }
+                            break;
+                        case HOME_YOUTUBE:
+                            if (youtube_is_available()) {
+                                ytsearch_init();
+                                ytsearch_set_render_callback(download_render_callback);
+                                *state = STATE_YOUTUBE_SEARCH;
+                            }
+                            break;
+                    }
+                    break;
+                case INPUT_MENU:
+                    g_menu_return_state = STATE_HOME;
+                    menu_open(MENU_MODE_BROWSER);
+                    *state = STATE_MENU;
+                    break;
+                default:
+                    break;
+            }
+            continue;
+        }
+
+        // Resume list handling
+        if (*state == STATE_RESUME) {
+            int count = positions_get_count();
+            switch (action) {
+                case INPUT_UP:
+                    if (g_resume_cursor > 0) {
+                        g_resume_cursor--;
+                        if (g_resume_cursor < g_resume_scroll) {
+                            g_resume_scroll = g_resume_cursor;
+                        }
+                    }
+                    break;
+                case INPUT_DOWN:
+                    if (g_resume_cursor < count - 1) {
+                        g_resume_cursor++;
+                        if (g_resume_cursor >= g_resume_scroll + LIST_VISIBLE_ROWS) {
+                            g_resume_scroll = g_resume_cursor - LIST_VISIBLE_ROWS + 1;
+                        }
+                    }
+                    break;
+                case INPUT_SELECT: {
+                    // Play selected track from saved position
+                    // Disable favorites playback mode - we're now playing from resume
+                    favorites_set_playback_mode(false, 0);
+                    char path[512];
+                    int pos = positions_get_entry(g_resume_cursor, path, sizeof(path));
+                    if (pos >= 0 && path[0]) {
+                        // Navigate browser to file's directory
+                        char dir[512];
+                        strncpy(dir, path, sizeof(dir) - 1);
+                        char *last_slash = strrchr(dir, '/');
+                        if (last_slash) {
+                            *last_slash = '\0';
+                            browser_navigate_to(dir);
+                            // Find and select the file
+                            const char *filename = last_slash + 1;
+                            int browser_count = browser_get_count();
+                            for (int i = 0; i < browser_count; i++) {
+                                const FileEntry *entry = browser_get_entry(i);
+                                if (entry && strcmp(entry->name, filename) == 0) {
+                                    browser_set_cursor(i);
+                                    break;
+                                }
+                            }
+                        }
+                        if (play_file(path)) {
+                            *state = (g_pending_resume_pos > 0) ? STATE_RESUME_PROMPT : STATE_PLAYING;
+                        }
+                    }
+                    break;
+                }
+                case INPUT_FAVORITE:
+                    // Y = remove from resume list
+                    if (count > 0) {
+                        char path[512];
+                        if (positions_get_entry(g_resume_cursor, path, sizeof(path)) >= 0) {
+                            positions_clear(path);
+                            // Adjust cursor if needed
+                            int new_count = positions_get_count();
+                            if (g_resume_cursor >= new_count && new_count > 0) {
+                                g_resume_cursor = new_count - 1;
+                            }
+                            if (new_count == 0) {
+                                *state = STATE_HOME;
+                            }
+                        }
+                    }
+                    break;
+                case INPUT_BACK:
+                    *state = STATE_HOME;
+                    break;
+                default:
+                    break;
+            }
+            continue;
+        }
+
+        // Favorites list handling
+        if (*state == STATE_FAVORITES) {
+            int count = favorites_get_count();
+            switch (action) {
+                case INPUT_UP:
+                    if (g_favorites_cursor > 0) {
+                        g_favorites_cursor--;
+                        if (g_favorites_cursor < g_favorites_scroll) {
+                            g_favorites_scroll = g_favorites_cursor;
+                        }
+                    }
+                    break;
+                case INPUT_DOWN:
+                    if (g_favorites_cursor < count - 1) {
+                        g_favorites_cursor++;
+                        if (g_favorites_cursor >= g_favorites_scroll + LIST_VISIBLE_ROWS) {
+                            g_favorites_scroll = g_favorites_cursor - LIST_VISIBLE_ROWS + 1;
+                        }
+                    }
+                    break;
+                case INPUT_SELECT: {
+                    // Play selected favorite
+                    const char *path = favorites_get_path(g_favorites_cursor);
+                    if (path) {
+                        // Enable favorites playback mode
+                        favorites_set_playback_mode(true, g_favorites_cursor);
+
+                        // Still navigate browser for display purposes
+                        char dir[512];
+                        strncpy(dir, path, sizeof(dir) - 1);
+                        char *last_slash = strrchr(dir, '/');
+                        if (last_slash) {
+                            *last_slash = '\0';
+                            browser_navigate_to(dir);
+                            const char *filename = last_slash + 1;
+                            int browser_count = browser_get_count();
+                            for (int i = 0; i < browser_count; i++) {
+                                const FileEntry *entry = browser_get_entry(i);
+                                if (entry && strcmp(entry->name, filename) == 0) {
+                                    browser_set_cursor(i);
+                                    break;
+                                }
+                            }
+                        }
+                        if (play_file(path)) {
+                            *state = (g_pending_resume_pos > 0) ? STATE_RESUME_PROMPT : STATE_PLAYING;
+                        }
+                    }
+                    break;
+                }
+                case INPUT_FAVORITE:
+                    // Y = remove from favorites
+                    if (count > 0) {
+                        const char *path = favorites_get_path(g_favorites_cursor);
+                        if (path) {
+                            favorites_remove(path);
+                            // Adjust cursor if needed
+                            int new_count = favorites_get_count();
+                            if (g_favorites_cursor >= new_count && new_count > 0) {
+                                g_favorites_cursor = new_count - 1;
+                            }
+                            if (new_count == 0) {
+                                *state = STATE_HOME;
+                            }
+                        }
+                    }
+                    break;
+                case INPUT_BACK:
+                    *state = STATE_HOME;
+                    break;
+                default:
+                    break;
+            }
+            continue;
         }
 
         // File menu handling
@@ -419,9 +732,11 @@ static void handle_input(AppState *state) {
                     case INPUT_SELECT:
                         if (browser_select_current()) {
                             // File selected, start playing (with position restore)
+                            // Disable favorites playback mode - we're now playing from browser
+                            favorites_set_playback_mode(false, 0);
                             const char *path = browser_get_selected_path();
                             if (play_file(path)) {
-                                *state = STATE_PLAYING;
+                                *state = (g_pending_resume_pos > 0) ? STATE_RESUME_PROMPT : STATE_PLAYING;
                             } else {
                                 // Show error state (will auto-return to browser)
                                 *state = STATE_ERROR;
@@ -429,8 +744,10 @@ static void handle_input(AppState *state) {
                         }
                         break;
                     case INPUT_BACK:
-                        // Just navigate up, don't exit (use Start+B to exit)
-                        browser_go_up();
+                        // Navigate up, or return to HOME if at root
+                        if (!browser_go_up()) {
+                            *state = STATE_HOME;
+                        }
                         break;
                     case INPUT_FAVORITE: {
                         // Toggle favorite for selected file
@@ -465,6 +782,7 @@ static void handle_input(AppState *state) {
                     case INPUT_MENU:
                         // Open options menu from browser
                         g_menu_return_state = STATE_BROWSER;
+                        menu_open(MENU_MODE_BROWSER);
                         *state = STATE_MENU;
                         break;
                     default:
@@ -491,6 +809,7 @@ static void handle_input(AppState *state) {
                         // Save position before going back to browser
                         save_current_position();
                         audio_stop();
+                        ui_player_reset_scroll();
                         g_current_track_path[0] = '\0';  // Clear current track
                         *state = STATE_BROWSER;
                         break;
@@ -505,14 +824,28 @@ static void handle_input(AppState *state) {
                         break;
                     case INPUT_PREV:
                         // Play previous track (with position save/restore)
-                        if (browser_move_cursor(-1)) {
+                        if (favorites_is_playback_mode()) {
+                            favorites_advance_playback(-1);
+                            const char *path = favorites_get_current_playback_path();
+                            if (path) {
+                                g_favorites_cursor = favorites_get_playback_index();
+                                play_file(path);
+                            }
+                        } else if (browser_move_cursor(-1)) {
                             const char *path = browser_get_selected_path();
                             play_file(path);
                         }
                         break;
                     case INPUT_NEXT:
                         // Play next track (with position save/restore)
-                        if (browser_move_cursor(1)) {
+                        if (favorites_is_playback_mode()) {
+                            favorites_advance_playback(1);
+                            const char *path = favorites_get_current_playback_path();
+                            if (path) {
+                                g_favorites_cursor = favorites_get_playback_index();
+                                play_file(path);
+                            }
+                        } else if (browser_move_cursor(1)) {
                             const char *path = browser_get_selected_path();
                             play_file(path);
                         }
@@ -527,6 +860,7 @@ static void handle_input(AppState *state) {
                         break;
                     case INPUT_MENU:
                         g_menu_return_state = STATE_PLAYING;
+                        menu_open(MENU_MODE_PLAYER);
                         *state = STATE_MENU;
                         break;
                     case INPUT_VOL_UP:
@@ -541,13 +875,25 @@ static void handle_input(AppState *state) {
                         break;
                     case INPUT_SEEK_START:
                         // L2 - jump to beginning of track
-                        audio_seek_absolute(0);
+                        if (audio_is_flac()) {
+                            // FLAC: use STATE_SEEKING for clean loading display
+                            g_seek_target = 0;
+                            *state = STATE_SEEKING;
+                        } else {
+                            audio_seek_absolute(0);
+                        }
                         break;
                     case INPUT_SEEK_END: {
                         // R2 - jump near end of track (5 seconds before end)
                         const TrackInfo *info = audio_get_track_info();
                         if (info && info->duration_sec > 5) {
-                            audio_seek_absolute(info->duration_sec - 5);
+                            if (audio_is_flac()) {
+                                // FLAC: use STATE_SEEKING for clean loading display
+                                g_seek_target = info->duration_sec - 5;
+                                *state = STATE_SEEKING;
+                            } else {
+                                audio_seek_absolute(info->duration_sec - 5);
+                            }
                         }
                         break;
                     }
@@ -564,24 +910,17 @@ static void handle_input(AppState *state) {
                     case INPUT_DOWN:
                         menu_move_cursor(1);
                         break;
-                    case INPUT_SELECT:
-                        if (menu_select()) {
-                            // Check if YouTube was selected
-                            if (menu_youtube_selected()) {
-                                menu_reset_youtube();
-                                // Initialize YouTube search and switch state
-                                ytsearch_init();
-                                ytsearch_set_render_callback(download_render_callback);
-                                *state = STATE_YOUTUBE_SEARCH;
-                            } else {
-                                // Exit selected - stop playback (if playing) and return to browser
-                                if (g_menu_return_state == STATE_PLAYING) {
-                                    audio_stop();
-                                }
-                                *state = STATE_BROWSER;
-                            }
+                    case INPUT_SELECT: {
+                        MenuResult result = menu_select();
+                        if (result == MENU_RESULT_EQUALIZER) {
+                            g_eq_band = 0;  // Start on Bass
+                            *state = STATE_EQUALIZER;
+                        } else if (result == MENU_RESULT_CLOSE) {
+                            *state = g_menu_return_state;
                         }
+                        // MENU_RESULT_NONE: stay in menu
                         break;
+                    }
                     case INPUT_BACK:
                         // Return to previous state (browser or player)
                         *state = g_menu_return_state;
@@ -591,6 +930,40 @@ static void handle_input(AppState *state) {
                         break;
                     case INPUT_VOL_DOWN:
                         audio_set_volume(audio_get_volume() - 5);
+                        break;
+                    default:
+                        break;
+                }
+                break;
+
+            case STATE_EQUALIZER:
+                switch (action) {
+                    case INPUT_LEFT:
+                        // Select previous band
+                        if (g_eq_band > 0) g_eq_band--;
+                        break;
+                    case INPUT_RIGHT:
+                        // Select next band
+                        if (g_eq_band < EQ_BAND_COUNT - 1) g_eq_band++;
+                        break;
+                    case INPUT_UP:
+                        // Increase selected band level
+                        eq_adjust_band(g_eq_band, 1);
+                        state_notify_settings_changed();
+                        break;
+                    case INPUT_DOWN:
+                        // Decrease selected band level
+                        eq_adjust_band(g_eq_band, -1);
+                        state_notify_settings_changed();
+                        break;
+                    case INPUT_SELECT:
+                        // A = Reset to flat
+                        eq_reset();
+                        state_notify_settings_changed();
+                        break;
+                    case INPUT_BACK:
+                        // B = Back to menu
+                        *state = STATE_MENU;
                         break;
                     default:
                         break;
@@ -624,6 +997,8 @@ static void handle_input(AppState *state) {
                         filemenu_rename_insert();
                         break;
                     case INPUT_FAVORITE:
+                    case INPUT_BACK:
+                        // Y or B = delete character (backspace)
                         filemenu_rename_delete();
                         break;
                     case INPUT_MENU: {
@@ -635,7 +1010,8 @@ static void handle_input(AppState *state) {
                         *state = STATE_BROWSER;
                         break;
                     }
-                    case INPUT_BACK:
+                    case INPUT_SHUFFLE:
+                        // Select = cancel
                         *state = STATE_BROWSER;
                         break;
                     default:
@@ -644,7 +1020,11 @@ static void handle_input(AppState *state) {
                 break;
 
             case STATE_CONFIRM:
-                // Handled within STATE_FILE_MENU
+                // Handled earlier with dedicated if-block
+                break;
+
+            case STATE_RESUME_PROMPT:
+                // Handled earlier with dedicated if-block
                 break;
 
             case STATE_SCANNING:
@@ -680,6 +1060,8 @@ static void handle_input(AppState *state) {
                         ytsearch_insert();
                         break;
                     case INPUT_FAVORITE:
+                    case INPUT_BACK:
+                        // Y or B = delete character (backspace)
                         ytsearch_delete();
                         break;
                     case INPUT_MENU:
@@ -688,7 +1070,8 @@ static void handle_input(AppState *state) {
                             // State will change to SEARCHING in update()
                         }
                         break;
-                    case INPUT_BACK:
+                    case INPUT_SHUFFLE:
+                        // Select = cancel
                         *state = STATE_BROWSER;
                         break;
                     default:
@@ -774,7 +1157,7 @@ static void handle_input(AppState *state) {
                                     }
                                 }
                                 if (play_file(filepath)) {
-                                    *state = STATE_PLAYING;
+                                    *state = (g_pending_resume_pos > 0) ? STATE_RESUME_PROMPT : STATE_PLAYING;
                                 }
                             }
                         }
@@ -807,6 +1190,16 @@ static void handle_input(AppState *state) {
             case STATE_ERROR:
                 // Handled above with continue statement
                 break;
+
+            case STATE_HOME:
+            case STATE_RESUME:
+            case STATE_FAVORITES:
+                // Handled above with continue statement
+                break;
+
+            case STATE_SEEKING:
+                // No input during seek - wait for update() to complete
+                break;
         }
     }
 }
@@ -819,8 +1212,21 @@ static int g_last_saved_position = -1;  // Track last saved value to avoid redun
 #define POSITION_SAVE_INTERVAL_MS 15000  // Save position every 15 seconds (was 10)
 
 static void update(AppState *state) {
+    // Check power switch (GPIO 243) - poll every 200ms
+    static Uint32 last_switch_check = 0;
+    Uint32 now = SDL_GetTicks();
+    if (now - last_switch_check > 200) {
+        last_switch_check = now;
+        bool switch_on = screen_switch_is_on();
+        if (switch_on && !screen_is_off()) {
+            screen_off();
+        } else if (!switch_on && screen_is_off()) {
+            screen_on();
+        }
+    }
+
     // Check sleep timer
-    if (*state == STATE_PLAYING || *state == STATE_MENU) {
+    if (*state == STATE_PLAYING || *state == STATE_MENU || *state == STATE_EQUALIZER) {
         if (menu_update_sleep_timer()) {
             // Sleep timer expired - save position and return to browser
             save_current_position();
@@ -856,13 +1262,49 @@ static void update(AppState *state) {
 
         if (repeat == REPEAT_ONE) {
             // Repeat current track from beginning
-            const char *path = browser_get_selected_path();
+            const char *path = favorites_is_playback_mode()
+                ? favorites_get_current_playback_path()
+                : browser_get_selected_path();
             if (path && audio_load(path)) {
                 strncpy(g_current_track_path, path, sizeof(g_current_track_path) - 1);
                 audio_play();
             }
+        } else if (favorites_is_playback_mode()) {
+            // Favorites playback mode - advance through favorites
+            int fav_count = favorites_get_count();
+            if (fav_count > 0) {
+                const char *path = NULL;
+                if (menu_is_shuffle_enabled()) {
+                    // Shuffle among favorites
+                    int random_idx = rand() % fav_count;
+                    favorites_set_playback_index(random_idx);
+                    path = favorites_get_current_playback_path();
+                } else {
+                    // Sequential through favorites
+                    int new_idx = favorites_advance_playback(1);
+                    if (new_idx == 0 && repeat != REPEAT_ALL) {
+                        // Wrapped around and repeat is off - stop
+                        g_current_track_path[0] = '\0';
+                        *state = STATE_BROWSER;
+                        favorites_set_playback_mode(false, 0);
+                    } else {
+                        path = favorites_get_current_playback_path();
+                    }
+                }
+                if (path && audio_load(path)) {
+                    strncpy(g_current_track_path, path, sizeof(g_current_track_path) - 1);
+                    // Update favorites cursor to match playback position
+                    g_favorites_cursor = favorites_get_playback_index();
+                    audio_play();
+                }
+            } else {
+                // No favorites, disable playback mode
+                favorites_set_playback_mode(false, 0);
+                g_current_track_path[0] = '\0';
+                *state = STATE_BROWSER;
+            }
         } else if (menu_is_shuffle_enabled()) {
-            // Shuffle: play random track from beginning
+            // Shuffle: play random track from browser
             int count = browser_get_count();
             if (count > 0) {
                 int random_offset = rand() % count;
@@ -874,12 +1316,32 @@ static void update(AppState *state) {
                 }
             }
         } else {
-            // Normal: advance to next track from beginning
+            // Normal: advance to next track in browser (with gapless support)
             if (browser_move_cursor(1)) {
                 const char *path = browser_get_selected_path();
-                if (path && audio_load(path)) {
-                    strncpy(g_current_track_path, path, sizeof(g_current_track_path) - 1);
-                    audio_play();
+                if (path) {
+                    // Try gapless transition first
+                    bool loaded = false;
+                    PreloadedTrack *preloaded = preload_consume(path);
+                    if (preloaded && preloaded->is_flac && preloaded->wav_data) {
+                        loaded = audio_load_preloaded(path, preloaded->wav_data,
+                                                       preloaded->wav_size, preloaded->duration_sec);
+                        if (loaded) {
+                            preloaded->wav_data = NULL;  // Ownership transferred
+                            printf("[GAPLESS] Seamless transition to: %s\n", path);
+                        }
+                        preload_free_track(preloaded);
+                    }
+                    if (!loaded) {
+                        loaded = audio_load(path);
+                    }
+                    if (loaded) {
+                        strncpy(g_current_track_path, path, sizeof(g_current_track_path) - 1);
+                        audio_play();
+                        // Preload next track
+                        const char *next = browser_get_next_track_path();
+                        if (next) preload_start(next);
+                    }
                 }
             } else if (repeat == REPEAT_ALL) {
                 // At end of list, go back to start
@@ -888,6 +1350,9 @@ static void update(AppState *state) {
                 if (path && audio_load(path)) {
                     strncpy(g_current_track_path, path, sizeof(g_current_track_path) - 1);
                     audio_play();
+                    // Preload next track
+                    const char *next = browser_get_next_track_path();
+                    if (next) preload_start(next);
                 }
             } else {
                 // No more tracks, return to browser
@@ -970,6 +1435,21 @@ static void update(AppState *state) {
         }
     }
 
+    // Handle seeking (state-based to allow audio to settle before seek)
+    // Uses a frame counter to ensure audio has started before seeking
+    static int seek_delay_frames = 0;
+    if (*state == STATE_SEEKING && g_seek_target >= 0) {
+        seek_delay_frames++;
+        if (seek_delay_frames >= 3) {  // Wait 3 frames (~100ms) for audio to start
+            audio_seek_absolute(g_seek_target);
+            g_seek_target = -1;
+            seek_delay_frames = 0;
+            *state = STATE_PLAYING;
+        }
+    } else {
+        seek_delay_frames = 0;
+    }
+
     // Update audio position (for progress bar)
     audio_update();
 }
@@ -979,6 +1459,15 @@ static void update(AppState *state) {
  */
 static void render(AppState *state) {
     switch (*state) {
+        case STATE_HOME:
+            ui_render_home();
+            break;
+        case STATE_RESUME:
+            ui_render_resume();
+            break;
+        case STATE_FAVORITES:
+            ui_render_favorites();
+            break;
         case STATE_BROWSER:
             ui_render_browser();
             break;
@@ -991,6 +1480,9 @@ static void render(AppState *state) {
         case STATE_MENU:
             ui_render_menu();
             break;
+        case STATE_EQUALIZER:
+            ui_render_equalizer();
+            break;
         case STATE_HELP_BROWSER:
             ui_render_help_browser();
             break;
@@ -1002,6 +1494,9 @@ static void render(AppState *state) {
             break;
         case STATE_CONFIRM:
             ui_render_confirm_delete();
+            break;
+        case STATE_RESUME_PROMPT:
+            ui_render_resume_prompt(g_pending_resume_pos);
             break;
         case STATE_RENAME:
             ui_render_rename();
@@ -1023,6 +1518,9 @@ static void render(AppState *state) {
             break;
         case STATE_DOWNLOAD_QUEUE:
             ui_render_download_queue();
+            break;
+        case STATE_SEEKING:
+            ui_render_loading("Seeking...");
             break;
         case STATE_ERROR:
             ui_render_error(g_error_message);
@@ -1075,6 +1573,12 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    // Initialize equalizer (after Mix_OpenAudio)
+    eq_init();
+
+    // Initialize preloader for gapless playback
+    preload_init();
+
     // Initialize metadata cache (MusicBrainz lookups)
     metadata_init();
 
@@ -1107,6 +1611,8 @@ int main(int argc, char *argv[]) {
     if (state_init() < 0) {
         fprintf(stderr, "State initialization failed (non-fatal)\n");
     }
+    // Register callback to save state when settings change (power mode, etc.)
+    state_set_settings_callback(save_app_state);
 
     // Initialize favorites
     if (favorites_init() < 0) {
@@ -1116,6 +1622,36 @@ int main(int argc, char *argv[]) {
     // Initialize position tracking
     if (positions_init() < 0) {
         fprintf(stderr, "Positions initialization failed (non-fatal)\n");
+    }
+
+    // Warm SD card cache for files with saved positions (prevents slow first-seek)
+    // Reads entire files to cache them for fast Mix_SetMusicPosition seeking
+    {
+        int pos_count = positions_get_count();
+        int files_to_cache = (pos_count < 10) ? pos_count : 10;
+        if (files_to_cache > 0) {
+            printf("[MAIN] Warming SD cache for %d files...\n", files_to_cache);
+            char path[512];
+            unsigned char cache_buf[32768];  // 32KB read buffer
+            for (int i = 0; i < files_to_cache; i++) {
+                // Show loading progress
+                char loading_msg[64];
+                snprintf(loading_msg, sizeof(loading_msg), "Loading cache %d/%d...", i + 1, files_to_cache);
+                ui_render_loading(loading_msg);
+
+                if (positions_get_entry(i, path, sizeof(path)) >= 0) {
+                    FILE *f = fopen(path, "rb");
+                    if (f) {
+                        // Read entire file to warm cache
+                        while (fread(cache_buf, 1, sizeof(cache_buf), f) == sizeof(cache_buf)) {
+                            // Just reading to warm cache
+                        }
+                        fclose(f);
+                    }
+                }
+            }
+            printf("[MAIN] SD cache warmed\n");
+        }
     }
 
     // Initialize screen brightness control
@@ -1137,6 +1673,9 @@ int main(int argc, char *argv[]) {
         menu_set_repeat(saved_state.repeat);
         theme_set(saved_state.theme);
         menu_set_power_mode(saved_state.power_mode);
+        for (int i = 0; i < EQ_BAND_COUNT; i++) {
+            eq_set_band_db(i, saved_state.eq_bands[i]);
+        }
 
         // Try to resume playback if there was an active track
         if (saved_state.has_resume_data && saved_state.last_file[0]) {

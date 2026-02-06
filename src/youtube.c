@@ -295,6 +295,8 @@ const char* youtube_download(const char *video_id, const char *title, YouTubePro
 
     snprintf(cmd, sizeof(cmd),
         "%s -x --audio-format mp3 "
+        "--audio-quality 0 "
+        "--postprocessor-args \"ffmpeg:-ar 44100 -ac 2\" "
         "--ffmpeg-location ./bin/ "
         "--no-playlist --progress --newline "
         "-o '%s' "
@@ -363,33 +365,13 @@ const char* youtube_download(const char *video_id, const char *title, YouTubePro
 
     int status = pclose(pipe);
 
-    // Check if file was created (MP3 format)
+    // Check if MP3 file was created
+    // Note: Only accept MP3 - webm/m4a cause crashes on Trimui (unsupported by SDL_mixer)
     if (access(g_download_file, F_OK) != 0) {
-        // Try alternative extensions (fallback in case conversion fails)
-        const char *alt_exts[] = {".mp3", ".webm", ".m4a", NULL};
-        char alt_path[512];
-        bool found = false;
-
-        // Build base path without extension (using sanitized title)
-        char base_path[512];
-        snprintf(base_path, sizeof(base_path), "%s/%s", g_download_dir, safe_filename);
-
-        for (int i = 0; alt_exts[i]; i++) {
-            snprintf(alt_path, sizeof(alt_path), "%s%s", base_path, alt_exts[i]);
-            if (access(alt_path, F_OK) == 0) {
-                strncpy(g_download_file, alt_path, sizeof(g_download_file) - 1);
-                printf("[YOUTUBE] Downloaded (%s): %s\n", alt_exts[i] + 1, g_download_file);
-                found = true;
-                break;
-            }
-        }
-
-        if (!found) {
-            snprintf(g_error, sizeof(g_error), "Download failed (exit: %d)", status);
-            fprintf(stderr, "[YOUTUBE] Download failed, exit code: %d\n", status);
-            g_download_file[0] = '\0';
-            return NULL;
-        }
+        snprintf(g_error, sizeof(g_error), "MP3 conversion failed (ffmpeg error?)");
+        fprintf(stderr, "[YOUTUBE] MP3 not created, exit code: %d\n", status);
+        g_download_file[0] = '\0';
+        return NULL;
     }
 
     if (progress_cb) {

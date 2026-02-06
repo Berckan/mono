@@ -46,4 +46,35 @@ bool screen_is_dimmed(void);
  */
 void screen_cleanup(void);
 
+/**
+ * Turn display completely off (via framebuffer blank)
+ * More power-saving than dimming - turns off entire panel
+ */
+void screen_off(void);
+
+/**
+ * Turn display back on (via framebuffer unblank)
+ * Restores previous brightness level
+ */
+void screen_on(void);
+
+/**
+ * Check if display is currently off
+ * @return true if display is blanked
+ */
+bool screen_is_off(void);
+
+/**
+ * Check if hardware power switch is in "lock" position
+ * @return true if switch is ON (device should be locked)
+ */
+bool screen_switch_is_on(void);
+
+/**
+ * Trigger system suspend (deep sleep)
+ * Uses echo mem > /sys/power/state like NextUI
+ * System will wake on power button press
+ */
+void screen_system_suspend(void);
+
 #endif // SCREEN_H

@@ -1,5 +1,8 @@
 /**
- * Menu System - Options menu for the player
+ * Menu System - Context-sensitive options menu
+ *
+ * Player menu:  Shuffle, Repeat, Sleep, Equalizer
+ * Browser menu: Theme, Power
  */
 
 #ifndef MENU_H
@@ -26,16 +29,32 @@ typedef enum {
 } PowerMode;
 
 /**
- * Menu items
+ * Menu mode - determines which items are shown
+ */
+typedef enum {
+    MENU_MODE_PLAYER,   // Opened from player: Shuffle, Repeat, Sleep, Equalizer
+    MENU_MODE_BROWSER   // Opened from browser/home: Theme, Power
+} MenuMode;
+
+/**
+ * Result of selecting a menu item
+ */
+typedef enum {
+    MENU_RESULT_NONE,       // Stay in menu (toggled an option)
+    MENU_RESULT_CLOSE,      // Close menu, return to caller
+    MENU_RESULT_EQUALIZER   // Open equalizer screen
+} MenuResult;
+
+/**
+ * Menu items (all possible items across modes)
  */
 typedef enum {
     MENU_SHUFFLE,
     MENU_REPEAT,
     MENU_SLEEP,
-    MENU_POWER,
+    MENU_EQUALIZER,
     MENU_THEME,
-    MENU_YOUTUBE,
-    MENU_EXIT,
+    MENU_POWER,
     MENU_ITEM_COUNT
 } MenuItem;
 
@@ -45,21 +64,44 @@ typedef enum {
 void menu_init(void);
 
 /**
- * Move cursor up/down
+ * Open menu in specified mode (resets cursor to 0)
+ * @param mode MENU_MODE_PLAYER or MENU_MODE_BROWSER
+ */
+void menu_open(MenuMode mode);
+
+/**
+ * Move cursor up/down within active items
  * @param direction -1 for up, 1 for down
  */
 void menu_move_cursor(int direction);
 
 /**
  * Toggle/cycle the currently selected option
- * @return true if EXIT was selected
+ * @return MenuResult indicating what action to take
  */
-bool menu_select(void);
+MenuResult menu_select(void);
 
 /**
- * Get current cursor position
+ * Get current cursor position (index into active items)
  */
 int menu_get_cursor(void);
+
+/**
+ * Get number of items in current mode
+ */
+int menu_get_item_count(void);
+
+/**
+ * Get display label for item at index in current mode
+ * @param index Index into active items (0-based)
+ * @return Static string with label (e.g. "Shuffle: On")
+ */
+const char* menu_get_item_label(int index);
+
+/**
+ * Get the MenuItem enum for the item at current cursor
+ */
+MenuItem menu_get_current_item(void);
 
 /**
  * Get shuffle state
@@ -101,17 +143,6 @@ void menu_set_shuffle(bool enabled);
  * Set repeat mode (for state restoration)
  */
 void menu_set_repeat(RepeatMode mode);
-
-/**
- * Check if YouTube was selected
- * @return true if MENU_YOUTUBE was last selected
- */
-bool menu_youtube_selected(void);
-
-/**
- * Reset YouTube selection flag
- */
-void menu_reset_youtube(void);
 
 /**
  * Get current power mode

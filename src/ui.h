@@ -22,6 +22,21 @@ int ui_init(int width, int height);
 void ui_cleanup(void);
 
 /**
+ * Render home menu screen (Resume, Browse, Favorites)
+ */
+void ui_render_home(void);
+
+/**
+ * Render resume list (tracks with saved positions)
+ */
+void ui_render_resume(void);
+
+/**
+ * Render favorites list
+ */
+void ui_render_favorites(void);
+
+/**
  * Render file browser screen
  */
 void ui_render_browser(void);
@@ -35,6 +50,11 @@ void ui_render_player(void);
  * Render options menu overlay
  */
 void ui_render_menu(void);
+
+/**
+ * Render equalizer screen (bass/treble horizontal bars)
+ */
+void ui_render_equalizer(void);
 
 /**
  * Render help overlay for browser mode
@@ -85,6 +105,12 @@ void ui_render_file_menu(void);
 void ui_render_confirm_delete(void);
 
 /**
+ * Render resume prompt dialog (ask user to resume from saved position)
+ * @param saved_pos Saved position in seconds
+ */
+void ui_render_resume_prompt(int saved_pos);
+
+/**
  * Render rename text input screen
  */
 void ui_render_rename(void);
@@ -124,5 +150,11 @@ bool ui_toast_active(void);
  * Get toast message (for external use)
  */
 const char* ui_get_toast_message(void);
+
+/**
+ * Reset player title/artist scroll position
+ * Call when changing songs to reset the scroll animation
+ */
+void ui_player_reset_scroll(void);
 
 #endif // UI_H

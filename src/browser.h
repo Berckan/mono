@@ -106,4 +106,17 @@ void browser_set_cursor(int pos);
  */
 int browser_navigate_to(const char *path);
 
+/**
+ * Rescan current directory preserving cursor position
+ * Used after delete to keep cursor near same position
+ */
+void browser_rescan_preserve_cursor(void);
+
+/**
+ * Get the path of the next audio file after current cursor
+ * Used for gapless playback preloading
+ * @return Path to next track, or NULL if none
+ */
+const char* browser_get_next_track_path(void);
+
 #endif // BROWSER_H

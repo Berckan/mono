@@ -29,7 +29,8 @@ typedef enum {
     INPUT_HELP,      // Y button hold - show help overlay
     INPUT_EXIT,      // Start + B combo - exit app
     INPUT_VOL_UP,    // Hardware volume up
-    INPUT_VOL_DOWN   // Hardware volume down
+    INPUT_VOL_DOWN,  // Hardware volume down
+    INPUT_SUSPEND    // Power button - system suspend
 } InputAction;
 
 /**
@@ -62,5 +63,28 @@ int input_get_seek_amount(void);
  * Check if seeking is active (Left or Right held)
  */
 bool input_is_seeking(void);
+
+/**
+ * Initialize input system (opens power button device on Linux)
+ * @return true on success
+ */
+bool input_init(void);
+
+/**
+ * Cleanup input system
+ */
+void input_cleanup(void);
+
+/**
+ * Poll power button (reads from /dev/input/event1 on Linux)
+ * @return INPUT_SUSPEND if power pressed, INPUT_NONE otherwise
+ */
+InputAction input_poll_power(void);
+
+/**
+ * Drain power button buffer (call after waking from suspend)
+ * Clears any accumulated events to prevent immediate re-suspend
+ */
+void input_drain_power(void);
 
 #endif // INPUT_H

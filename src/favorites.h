@@ -74,4 +74,47 @@ const char* favorites_get_path(int index);
  */
 bool favorites_save(void);
 
+// ========================================
+// Favorites Playback Mode
+// ========================================
+
+/**
+ * Set favorites playback mode
+ * When enabled, NEXT/PREV and auto-advance use favorites list instead of browser
+ * @param enabled Whether to enable favorites playback mode
+ * @param start_index Index in favorites list to start from
+ */
+void favorites_set_playback_mode(bool enabled, int start_index);
+
+/**
+ * Check if favorites playback mode is active
+ * @return true if playing from favorites
+ */
+bool favorites_is_playback_mode(void);
+
+/**
+ * Advance to next/prev favorite
+ * @param delta +1 for next, -1 for previous
+ * @return New index, or -1 if at boundary
+ */
+int favorites_advance_playback(int delta);
+
+/**
+ * Get path of current playback favorite
+ * @return Path string, or NULL if not in playback mode
+ */
+const char* favorites_get_current_playback_path(void);
+
+/**
+ * Get current playback index
+ * @return Current index in favorites list
+ */
+int favorites_get_playback_index(void);
+
+/**
+ * Set playback index directly (for shuffle)
+ * @param index New index to set
+ */
+void favorites_set_playback_index(int index);
+
 #endif // FAVORITES_H

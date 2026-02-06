@@ -18,21 +18,29 @@
 #include <stdio.h>
 #include <stdbool.h>
 
+#ifdef __linux__
+#include <fcntl.h>
+#include <unistd.h>
+#include <linux/input.h>
+#endif
+
 // Keyboard mappings for desktop testing
 // These mirror the Trimui Brick controls
-#define KEY_UP      SDLK_UP
-#define KEY_DOWN    SDLK_DOWN
-#define KEY_LEFT    SDLK_LEFT
-#define KEY_RIGHT   SDLK_RIGHT
-#define KEY_A       SDLK_z       // A button (confirm)
-#define KEY_B       SDLK_x       // B button (back)
-#define KEY_Y       SDLK_f       // Y button (favorite) - F key on keyboard
-#define KEY_L       SDLK_a       // L1 shoulder
-#define KEY_R       SDLK_s       // R1 shoulder
-#define KEY_L2      SDLK_q       // L2 trigger - jump to start
-#define KEY_R2      SDLK_w       // R2 trigger - jump to end
-#define KEY_START   SDLK_RETURN  // Start
-#define KEY_SELECT  SDLK_RSHIFT  // Select
+// Prefixed with KBRD_ to avoid conflicts with linux/input.h KEY_* defines
+#define KBRD_UP      SDLK_UP
+#define KBRD_DOWN    SDLK_DOWN
+#define KBRD_LEFT    SDLK_LEFT
+#define KBRD_RIGHT   SDLK_RIGHT
+#define KBRD_A       SDLK_z       // A button (confirm)
+#define KBRD_B       SDLK_x       // B button (back)
+#define KBRD_Y       SDLK_f       // Y button (favorite) - F key on keyboard
+#define KBRD_L       SDLK_a       // L1 shoulder
+#define KBRD_R       SDLK_s       // R1 shoulder
+#define KBRD_L2      SDLK_q       // L2 trigger - jump to start
+#define KBRD_R2      SDLK_w       // R2 trigger - jump to end
+#define KBRD_START   SDLK_RETURN  // Start
+#define KBRD_SELECT  SDLK_RSHIFT  // Select
+#define KBRD_POWER   SDLK_p       // Power button (suspend) - P key on keyboard
 
 // Trimui Brick joystick button indices (from NextUI platform.h)
 // These match the official NextUI mapping for tg5040 platform
@@ -50,6 +58,7 @@
 #define JOY_MENU    8
 #define JOY_VOL_UP  11  // Volume up
 #define JOY_VOL_DOWN 12 // Volume down
+#define JOY_POWER   10  // Power button (for suspend)
 
 // Button state tracking for debouncing (gamepad doesn't filter repeats like keyboard)
 static Uint8 g_button_state[16] = {0};
@@ -70,6 +79,17 @@ static Uint32 g_seek_start_time = 0;  // When Left/Right was first pressed
 static int g_seek_direction = 0;       // -1 for left, +1 for right, 0 for none
 static Uint32 g_last_seek_tick = 0;    // Last time we returned a seek amount
 
+// L2/R2 trigger debouncing (fire once per press, not continuously)
+static bool g_l2_triggered = false;
+static bool g_r2_triggered = false;
+
+// Power button device (Linux only - reads from /dev/input/event1)
+#ifdef __linux__
+static int g_power_fd = -1;
+#define POWER_BUTTON_DEVICE "/dev/input/event1"
+#define KEY_POWER_CODE 116  // KEY_POWER from linux/input-event-codes.h
+#endif
+
 
 InputAction input_handle_event(const SDL_Event *event) {
     switch (event->type) {
@@ -80,19 +100,20 @@ InputAction input_handle_event(const SDL_Event *event) {
             printf("[KEY] sym=%d\n", event->key.keysym.sym);
 
             switch (event->key.keysym.sym) {
-                case KEY_UP:     return INPUT_UP;
-                case KEY_DOWN:   return INPUT_DOWN;
-                case KEY_LEFT:   return INPUT_LEFT;
-                case KEY_RIGHT:  return INPUT_RIGHT;
-                case KEY_A:      return INPUT_SELECT;
-                case KEY_B:      return INPUT_BACK;
-                case KEY_Y:      return INPUT_FAVORITE;
-                case KEY_L:      return INPUT_PREV;
-                case KEY_R:      return INPUT_NEXT;
-                case KEY_L2:     return INPUT_SEEK_START;
-                case KEY_R2:     return INPUT_SEEK_END;
-                case KEY_START:  return INPUT_MENU;
-                case KEY_SELECT: return INPUT_SHUFFLE;
+                case KBRD_UP:     return INPUT_UP;
+                case KBRD_DOWN:   return INPUT_DOWN;
+                case KBRD_LEFT:   return INPUT_LEFT;
+                case KBRD_RIGHT:  return INPUT_RIGHT;
+                case KBRD_A:      return INPUT_SELECT;
+                case KBRD_B:      return INPUT_BACK;
+                case KBRD_Y:      return INPUT_FAVORITE;
+                case KBRD_L:      return INPUT_PREV;
+                case KBRD_R:      return INPUT_NEXT;
+                case KBRD_L2:     return INPUT_SEEK_START;
+                case KBRD_R2:     return INPUT_SEEK_END;
+                case KBRD_START:  return INPUT_MENU;
+                case KBRD_SELECT: return INPUT_SHUFFLE;
+                case KBRD_POWER:  return INPUT_SUSPEND;  // P key for suspend on desktop
                 case SDLK_ESCAPE:return INPUT_BACK;
                 case SDLK_h:     return INPUT_HELP;  // H key for help on desktop
                 // Hardware volume keys (Trimui Brick)
@@ -152,6 +173,7 @@ InputAction input_handle_event(const SDL_Event *event) {
                 case JOY_MENU:   return INPUT_MENU;     // Menu button
                 case JOY_VOL_UP:   return INPUT_VOL_UP;   // Hardware volume up
                 case JOY_VOL_DOWN: return INPUT_VOL_DOWN; // Hardware volume down
+                case JOY_POWER:    return INPUT_SUSPEND;  // Power button
                 default: break;
             }
             break;
@@ -224,7 +246,30 @@ InputAction input_handle_event(const SDL_Event *event) {
         case SDL_JOYAXISMOTION: {
             Uint32 now = SDL_GetTicks();
 
-            // Only act on significant axis movements
+            // L2/R2 triggers: lower threshold (4000) for quick taps
+            // These are simple actions: tap = jump to start/end
+            if (event->jaxis.axis == AXIS_L2) {
+                if (event->jaxis.value > 4000 && !g_l2_triggered) {
+                    g_l2_triggered = true;
+                    printf("[AXIS] L2 triggered (value=%d)\n", event->jaxis.value);
+                    return INPUT_SEEK_START;
+                } else if (event->jaxis.value < 2000) {
+                    g_l2_triggered = false;
+                }
+                break;
+            }
+            if (event->jaxis.axis == AXIS_R2) {
+                if (event->jaxis.value > 4000 && !g_r2_triggered) {
+                    g_r2_triggered = true;
+                    printf("[AXIS] R2 triggered (value=%d)\n", event->jaxis.value);
+                    return INPUT_SEEK_END;
+                } else if (event->jaxis.value < 2000) {
+                    g_r2_triggered = false;
+                }
+                break;
+            }
+
+            // Other axes: joystick movement (higher threshold)
             if (abs(event->jaxis.value) > 16000) {
                 printf("[AXIS] axis=%d value=%d\n", event->jaxis.axis, event->jaxis.value);
                 fflush(stdout);
@@ -245,13 +290,9 @@ InputAction input_handle_event(const SDL_Event *event) {
                     }
                 } else if (event->jaxis.axis == 1) {  // Y axis (Up/Down)
                     return (event->jaxis.value < 0) ? INPUT_UP : INPUT_DOWN;
-                } else if (event->jaxis.axis == AXIS_L2) {  // L2 trigger
-                    return INPUT_SEEK_START;
-                } else if (event->jaxis.axis == AXIS_R2) {  // R2 trigger
-                    return INPUT_SEEK_END;
                 }
             } else if (abs(event->jaxis.value) < 8000) {
-                // Axis returned to center - reset seek if X axis
+                // Axis returned to center - reset seek tracking
                 if (event->jaxis.axis == 0 && g_seek_direction != 0) {
                     g_seek_start_time = 0;
                     g_seek_direction = 0;
@@ -309,4 +350,67 @@ int input_get_seek_amount(void) {
     }
 
     return seek_seconds * g_seek_direction;
+}
+
+bool input_init(void) {
+#ifdef __linux__
+    // Open power button device (non-blocking)
+    g_power_fd = open(POWER_BUTTON_DEVICE, O_RDONLY | O_NONBLOCK);
+    if (g_power_fd < 0) {
+        printf("[INPUT] Warning: Could not open power button device %s\n", POWER_BUTTON_DEVICE);
+        // Not fatal - power button just won't work
+    } else {
+        printf("[INPUT] Power button device opened: %s\n", POWER_BUTTON_DEVICE);
+    }
+#endif
+    return true;
+}
+
+void input_cleanup(void) {
+#ifdef __linux__
+    if (g_power_fd >= 0) {
+        close(g_power_fd);
+        g_power_fd = -1;
+        printf("[INPUT] Power button device closed\n");
+    }
+#endif
+}
+
+InputAction input_poll_power(void) {
+#ifdef __linux__
+    if (g_power_fd < 0) {
+        return INPUT_NONE;
+    }
+
+    struct input_event ev;
+    while (read(g_power_fd, &ev, sizeof(ev)) == sizeof(ev)) {
+        // Check for KEY_POWER press (type=EV_KEY, code=KEY_POWER, value=1)
+        if (ev.type == EV_KEY && ev.code == KEY_POWER_CODE && ev.value == 1) {
+            printf("[POWER] Power button pressed!\n");
+            fflush(stdout);
+            return INPUT_SUSPEND;
+        }
+    }
+#endif
+    return INPUT_NONE;
+}
+
+void input_drain_power(void) {
+#ifdef __linux__
+    if (g_power_fd < 0) {
+        return;
+    }
+
+    // Small delay to let any pending events arrive
+    usleep(100000);  // 100ms
+
+    // Drain all pending events
+    struct input_event ev;
+    int drained = 0;
+    while (read(g_power_fd, &ev, sizeof(ev)) == sizeof(ev)) {
+        drained++;
+    }
+    printf("[POWER] Drained %d events after wake\n", drained);
+    fflush(stdout);
+#endif
 }

@@ -120,4 +120,21 @@ const int16_t* audio_get_pcm_data(size_t *sample_count, int *channels, int *samp
  */
 bool audio_has_pcm_data(void);
 
+/**
+ * Check if currently loaded track is a FLAC file
+ * @return true if current track is FLAC (uses chunked decoding)
+ */
+bool audio_is_flac(void);
+
+/**
+ * Load audio from preloaded WAV data (for gapless playback)
+ * Takes ownership of the wav_data pointer
+ * @param path Original file path (for metadata)
+ * @param wav_data WAV data in memory (will be freed by audio_stop)
+ * @param wav_size Size of WAV data
+ * @param duration_sec Total duration in seconds
+ * @return true if loaded successfully
+ */
+bool audio_load_preloaded(const char *path, uint8_t *wav_data, size_t wav_size, int duration_sec);
+
 #endif // AUDIO_H

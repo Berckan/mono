@@ -10,6 +10,7 @@
 #define POSITIONS_H
 
 #include <stdbool.h>
+#include <stddef.h>
 
 /**
  * Initialize positions system
@@ -49,5 +50,20 @@ void positions_save(void);
  * Saves positions and frees memory
  */
 void positions_cleanup(void);
+
+/**
+ * Get number of saved positions
+ * @return Number of entries
+ */
+int positions_get_count(void);
+
+/**
+ * Get position entry by index (for iteration)
+ * @param index Entry index (0 to count-1)
+ * @param path Buffer to receive file path
+ * @param path_size Size of path buffer
+ * @return Position in seconds, or -1 if index invalid
+ */
+int positions_get_entry(int index, char *path, size_t path_size);
 
 #endif // POSITIONS_H

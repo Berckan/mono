@@ -249,6 +249,11 @@ bool browser_go_up(void) {
         return false;
     }
 
+    // Save the folder name we're leaving (for cursor positioning)
+    char leaving_folder[256];
+    strncpy(leaving_folder, last_sep + 1, sizeof(leaving_folder) - 1);
+    leaving_folder[sizeof(leaving_folder) - 1] = '\0';
+
     // Truncate to parent directory
     *last_sep = '\0';
 
@@ -258,6 +263,24 @@ bool browser_go_up(void) {
     }
 
     scan_directory(g_current_path);
+
+    // Find and select the folder we came from
+    if (leaving_folder[0]) {
+        for (int i = 0; i < g_entry_count; i++) {
+            if (g_entries[i].type == ENTRY_DIRECTORY &&
+                strcmp(g_entries[i].name, leaving_folder) == 0) {
+                g_cursor = i;
+                // Update scroll offset to keep cursor visible
+                if (g_cursor < g_scroll_offset) {
+                    g_scroll_offset = g_cursor;
+                } else if (g_cursor >= g_scroll_offset + VISIBLE_ITEMS) {
+                    g_scroll_offset = g_cursor - VISIBLE_ITEMS + 1;
+                }
+                break;
+            }
+        }
+    }
+
     return true;
 }
 
@@ -318,4 +341,40 @@ int browser_navigate_to(const char *path) {
 
     strncpy(g_current_path, path, sizeof(g_current_path) - 1);
     return scan_directory(g_current_path);
+}
+
+void browser_rescan_preserve_cursor(void) {
+    int old_cursor = g_cursor;
+
+    scan_directory(g_current_path);
+
+    // Adjust cursor: if was at or past end, go to new last item
+    if (old_cursor >= g_entry_count) {
+        g_cursor = g_entry_count > 0 ? g_entry_count - 1 : 0;
+    } else {
+        g_cursor = old_cursor;
+    }
+
+    // Update scroll offset to keep cursor visible
+    if (g_cursor < g_scroll_offset) {
+        g_scroll_offset = g_cursor;
+    } else if (g_cursor >= g_scroll_offset + VISIBLE_ITEMS) {
+        g_scroll_offset = g_cursor - VISIBLE_ITEMS + 1;
+    }
+}
+
+const char* browser_get_next_track_path(void) {
+    // Find next audio file after current cursor
+    for (int i = g_cursor + 1; i < g_entry_count; i++) {
+        if (g_entries[i].type == ENTRY_FILE) {
+            return g_entries[i].full_path;
+        }
+    }
+    // Wrap around to beginning (for repeat all mode)
+    for (int i = 0; i < g_cursor; i++) {
+        if (g_entries[i].type == ENTRY_FILE) {
+            return g_entries[i].full_path;
+        }
+    }
+    return NULL;
 }

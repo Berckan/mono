@@ -219,6 +219,11 @@ bool state_save(const AppStateData *data) {
     fprintf(f, "  \"repeat\": %d,\n", (int)data->repeat);
     fprintf(f, "  \"theme\": %d,\n", (int)data->theme);
     fprintf(f, "  \"power_mode\": %d,\n", (int)data->power_mode);
+    fprintf(f, "  \"eq_band_0\": %d,\n", data->eq_bands[0]);
+    fprintf(f, "  \"eq_band_1\": %d,\n", data->eq_bands[1]);
+    fprintf(f, "  \"eq_band_2\": %d,\n", data->eq_bands[2]);
+    fprintf(f, "  \"eq_band_3\": %d,\n", data->eq_bands[3]);
+    fprintf(f, "  \"eq_band_4\": %d,\n", data->eq_bands[4]);
     fprintf(f, "  \"was_playing\": %s\n", data->was_playing ? "true" : "false");
     fprintf(f, "}\n");
 
@@ -237,6 +242,7 @@ bool state_load(AppStateData *data) {
     data->repeat = REPEAT_OFF;
     data->theme = THEME_DARK;
     data->power_mode = POWER_MODE_BALANCED;
+    memset(data->eq_bands, 0, sizeof(data->eq_bands));
     data->has_resume_data = false;
 
     FILE *f = fopen(g_state_path, "r");
@@ -293,6 +299,18 @@ bool state_load(AppStateData *data) {
         data->power_mode = (PowerMode)power_mode_int;
     }
 
+    // Load 5-band EQ (with backwards compat for old eq_bass/eq_treble)
+    json_get_int(json, "eq_band_0", &data->eq_bands[0]);
+    json_get_int(json, "eq_band_1", &data->eq_bands[1]);
+    json_get_int(json, "eq_band_2", &data->eq_bands[2]);
+    json_get_int(json, "eq_band_3", &data->eq_bands[3]);
+    json_get_int(json, "eq_band_4", &data->eq_bands[4]);
+    // Backwards compat: old files had eq_bass (band 0) and eq_treble (band 4)
+    if (!strstr(json, "eq_band_0")) {
+        json_get_int(json, "eq_bass", &data->eq_bands[0]);
+        json_get_int(json, "eq_treble", &data->eq_bands[4]);
+    }
+
     json_get_bool(json, "was_playing", &data->was_playing);
 
     free(json);
@@ -322,4 +340,17 @@ void state_clear(void) {
 
 const char* state_get_data_dir(void) {
     return g_data_dir;
+}
+
+// Settings changed callback
+static SettingsChangedCallback g_settings_callback = NULL;
+
+void state_set_settings_callback(SettingsChangedCallback callback) {
+    g_settings_callback = callback;
+}
+
+void state_notify_settings_changed(void) {
+    if (g_settings_callback) {
+        g_settings_callback();
+    }
 }

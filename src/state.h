@@ -30,6 +30,7 @@ typedef struct {
     RepeatMode repeat;            // Repeat mode (OFF/ONE/ALL)
     ThemeId theme;                // UI theme (DARK/LIGHT)
     PowerMode power_mode;         // Power mode (BATTERY/BALANCED/PERFORMANCE)
+    int eq_bands[5];              // Equalizer bands 0-4 (-12 to +12 dB)
 
     // State flags
     bool was_playing;             // Was playback active when app closed
@@ -74,5 +75,23 @@ void state_clear(void);
  * @return Path to Mono's data directory
  */
 const char* state_get_data_dir(void);
+
+/**
+ * Settings changed callback type
+ */
+typedef void (*SettingsChangedCallback)(void);
+
+/**
+ * Register a callback to be called when settings change
+ * Used by main.c to register save_app_state
+ * @param callback Function to call when settings change
+ */
+void state_set_settings_callback(SettingsChangedCallback callback);
+
+/**
+ * Notify that settings have changed (triggers save)
+ * Called by menu.c when user changes power mode, etc.
+ */
+void state_notify_settings_changed(void);
 
 #endif // STATE_H

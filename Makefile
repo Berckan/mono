@@ -32,12 +32,12 @@ ifeq ($(PLATFORM),)
         # macOS
         CC = clang
         CFLAGS = $(COMMON_CFLAGS) $(SDL_CFLAGS)
-        LDFLAGS = $(COMMON_LDFLAGS) $(SDL_LDFLAGS)
+        LDFLAGS = $(COMMON_LDFLAGS) $(SDL_LDFLAGS) -lm
     else
         # Linux
         CC = gcc
         CFLAGS = $(COMMON_CFLAGS) $(SDL_CFLAGS)
-        LDFLAGS = $(COMMON_LDFLAGS) $(SDL_LDFLAGS)
+        LDFLAGS = $(COMMON_LDFLAGS) $(SDL_LDFLAGS) -lm
     endif
 endif
 

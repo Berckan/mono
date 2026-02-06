@@ -232,3 +232,17 @@ void positions_cleanup(void) {
     positions_save();
     g_position_count = 0;
 }
+
+int positions_get_count(void) {
+    return g_position_count;
+}
+
+int positions_get_entry(int index, char *path, size_t path_size) {
+    if (index < 0 || index >= g_position_count || !path || path_size == 0) {
+        return -1;
+    }
+
+    strncpy(path, g_positions[index].path, path_size - 1);
+    path[path_size - 1] = '\0';
+    return g_positions[index].position_sec;
+}

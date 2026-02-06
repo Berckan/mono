@@ -26,3 +26,7 @@ CLAUDE.md
 # Release artifacts
 *.zip
 *.tar.gz
+
+# Development test files
+test_disp
+test_disp.c
