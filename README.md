@@ -81,39 +81,56 @@ Copy `Mono.pak/` to `/Tools/tg5040/` on your SD card.
 
 ## Controls
 
+### Home Menu
+
+| Button   | Action       |
+| -------- | ------------ |
+| D-Pad ↑↓ | Navigate     |
+| A        | Select       |
+| B        | Exit app     |
+| X        | Help overlay |
+| Start    | Options menu |
+
 ### Browser Mode
 
 | Button   | Action                    |
 | -------- | ------------------------- |
 | D-Pad ↑↓ | Navigate files            |
-| A        | Select / Enter            |
-| B        | Back / Exit               |
-| X        | File menu (rename/delete) |
+| A        | Select / Enter folder     |
+| B        | Back / Parent folder      |
+| X        | Help overlay              |
 | Y        | Toggle favorite           |
-| Start    | YouTube search            |
+| Select   | File menu (rename/delete) |
+| Start    | Options menu              |
+| Power    | Suspend (pocket mode)     |
 
 ### Player Mode
 
-| Button   | Action            |
-| -------- | ----------------- |
-| D-Pad ↑↓ | Volume ±5%        |
-| D-Pad ←→ | Seek ±10s         |
-| A        | Play / Pause      |
-| B        | Back to browser   |
-| X        | Cycle theme       |
-| Y        | Toggle favorite   |
-| L/R      | Prev / Next track |
-| L2/R2    | Seek ±30s / ±60s  |
-| Start    | Options menu      |
-| Select   | Dim screen        |
+| Button   | Action                     |
+| -------- | -------------------------- |
+| D-Pad ↑↓ | Volume ±5%                 |
+| D-Pad ←→ | Seek (accelerates on hold) |
+| A        | Play / Pause               |
+| B        | Back to browser            |
+| X        | Help overlay               |
+| Y        | Toggle favorite            |
+| L/R      | Prev / Next track          |
+| L2       | Jump to start of track     |
+| R2       | Jump near end of track     |
+| Start    | Options menu               |
+| Select   | Dim screen                 |
+| Power    | Suspend (pocket mode)      |
+| Start+B  | Exit app                   |
 
-### Home Menu
+### YouTube Search / Rename Keyboard
 
-| Button   | Action   |
-| -------- | -------- |
-| D-Pad ↑↓ | Navigate |
-| A        | Select   |
-| B        | Exit app |
+| Button | Action           |
+| ------ | ---------------- |
+| D-Pad  | Move cursor      |
+| A      | Type character   |
+| Y / B  | Backspace        |
+| Start  | Confirm / Search |
+| Select | Cancel           |
 
 ## Project Structure
 
