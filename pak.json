@@ -1,0 +1,35 @@
+{
+  "name": "Mono",
+  "version": "v1.9.0",
+  "type": "TOOL",
+  "description": "Feature-rich music player with Spotify Connect, YouTube downloads, Bluetooth audio, and equalizer",
+  "author": "berckan",
+  "repo_url": "https://github.com/berckan/mono",
+  "release_filename": "Mono.pak.zip",
+  "platforms": ["tg5040"],
+  "features": [
+    "File browser with folder navigation",
+    "MP3, FLAC, OGG, WAV playback",
+    "Home menu (Resume, Favorites, Browse, YouTube, Spotify)",
+    "5-band parametric equalizer",
+    "Gapless playback for FLAC",
+    "Bluetooth audio via bluealsa",
+    "Spotify Connect receiver via librespot",
+    "YouTube search and download via yt-dlp",
+    "Favorites system",
+    "Resume playback on restart",
+    "Shuffle, repeat, sleep timer",
+    "Album cover art display",
+    "Self-update from GitHub releases",
+    "WiFi/Bluetooth status indicators",
+    "Screen dimming for battery save",
+    "Pocket mode (power button suspend)"
+  ],
+  "changelog": {
+    "v1.9.0": "WiFi/BT status indicators, dynamic lists, scrolling text, UI polish",
+    "v1.8.0": "Bluetooth audio, Spotify Connect, self-update, pocket mode, L2/R2 seek",
+    "v1.7.0": "Home Menu, 5-band Equalizer, Gapless Playback",
+    "v1.6.0": "YouTube integration, themes, cover art, file management",
+    "v1.5.0": "Screen dimming, help overlay, power-optimized launcher"
+  }
+}
