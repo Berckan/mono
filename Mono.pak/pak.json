@@ -25,6 +25,14 @@
     "Screen dimming for battery save",
     "Pocket mode (power button suspend)"
   ],
+  "screenshots": [
+    ".github/resources/screenshots/home.jpg",
+    ".github/resources/screenshots/player.jpg",
+    ".github/resources/screenshots/browser.jpg",
+    ".github/resources/screenshots/equalizer.jpg",
+    ".github/resources/screenshots/youtube.jpg",
+    ".github/resources/screenshots/resume.jpg"
+  ],
   "changelog": {
     "v1.9.0": "WiFi/BT status indicators, dynamic lists, scrolling text, UI polish",
     "v1.8.0": "Bluetooth audio, Spotify Connect, self-update, pocket mode, L2/R2 seek",

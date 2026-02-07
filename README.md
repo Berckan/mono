@@ -1,10 +1,31 @@
-# Mono
+<p align="center">
+  <img src=".github/resources/monkey.png" alt="Mono" width="128" height="128" style="image-rendering: pixelated;">
+</p>
 
-<!-- TODO: Add monito isotipo here -->
+<h1 align="center">Mono</h1>
 
-Feature-rich music player for **Trimui Brick** running NextUI/MinUI custom firmware.
+<p align="center">
+  <strong>Your pocket music monkey for Trimui Brick</strong><br>
+  Feature-rich music player for <a href="https://trimui.com">Trimui Brick</a> running NextUI/MinUI custom firmware.
+</p>
 
-![Mono Screenshot](docs/screenshot.png)
+<p align="center">
+  <img src=".github/resources/screenshots/player.jpg" alt="Now Playing" width="480">
+</p>
+
+## Screenshots
+
+<p align="center">
+  <img src=".github/resources/screenshots/home.jpg" alt="Home Menu" width="320">
+  <img src=".github/resources/screenshots/browser.jpg" alt="File Browser" width="320">
+</p>
+<p align="center">
+  <img src=".github/resources/screenshots/equalizer.jpg" alt="Equalizer" width="320">
+  <img src=".github/resources/screenshots/youtube.jpg" alt="YouTube Search" width="320">
+</p>
+<p align="center">
+  <img src=".github/resources/screenshots/resume.jpg" alt="Resume List" width="320">
+</p>
 
 ## Features
 
