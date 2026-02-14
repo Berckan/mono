@@ -106,10 +106,10 @@ install: tg5040
 		echo "SD card not mounted at /Volumes/SDCARD"; \
 	fi
 
-# Package release
+# Package release (zip from inside PAK_DIR so Pak Store gets flat structure)
 release: tg5040
 	@rm -f $(TARGET)-release.zip
-	zip -r $(TARGET)-release.zip $(PAK_DIR)
+	cd $(PAK_DIR) && zip -r ../$(TARGET)-release.zip .
 	@echo "Created $(TARGET)-release.zip"
 
 # Deploy via SSH (requires .env with TRIMUI_* variables)
