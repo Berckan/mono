@@ -1,6 +1,6 @@
 {
   "name": "Mono",
-  "version": "v1.9.0",
+  "version": "v1.9.1",
   "type": "TOOL",
   "description": "Feature-rich music player with Spotify Connect, YouTube downloads, Bluetooth audio, and equalizer",
   "author": "berckan",
@@ -34,6 +34,7 @@
     ".github/resources/screenshots/resume.jpg"
   ],
   "changelog": {
+    "v1.9.1": "Fix Pak Store installation (flat zip structure)",
     "v1.9.0": "WiFi/BT status indicators, dynamic lists, scrolling text, UI polish",
     "v1.8.0": "Bluetooth audio, Spotify Connect, self-update, pocket mode, L2/R2 seek",
     "v1.7.0": "Home Menu, 5-band Equalizer, Gapless Playback",

@@ -1,5 +1,14 @@
 # Changelog
 
+## [2026.02.14] - v1.9.1
+
+### Fixed
+
+- Fix(Build): Flatten release zip structure for Pak Store compatibility
+  WHY: Zip contained a wrapper directory (Mono.pak/) instead of flat contents, causing Pak Store installation to fail.
+
+---
+
 ## [2026.02.06] - v1.9.0
 
 ### Added

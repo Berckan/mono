@@ -9,12 +9,12 @@
 #define VERSION_H
 
 // Version string (displayed to user)
-#define VERSION "1.9.0"
+#define VERSION "1.9.1"
 
 // Version components for comparison
 #define VERSION_MAJOR 1
 #define VERSION_MINOR 9
-#define VERSION_PATCH 0
+#define VERSION_PATCH 1
 
 // User agent for API requests
 #define VERSION_USER_AGENT "Mono/" VERSION " (https://github.com/berckan/mono)"
