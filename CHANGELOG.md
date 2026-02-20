@@ -1,5 +1,20 @@
 # Changelog
 
+## [2026.02.20] - v1.9.2
+
+### Fixed
+
+- Fix(Update): Self-update now handles zip release assets
+  WHY: Updater only looked for a bare "mono" binary in GitHub release assets, but v1.9.0+ releases use zip files (Mono.pak.zip, mono-release.zip). Now downloads zip, extracts bin/mono, and applies update. Falls back to bare binary for older releases.
+
+- Fix(PakStore): Corrected release_filename in pak.json
+  WHY: pak.json declared "Mono.pak.zip" but v1.9.1 release asset was "mono-release.zip". Pak Store couldn't find the asset, causing "Download Failed".
+
+- Fix(Release): Include bare binary in release for backward compatibility
+  WHY: Users on v1.9.0 or older have updaters that look for a bare "mono" asset. Including it alongside the zip ensures they can self-update without manual installation.
+
+---
+
 ## [2026.02.14] - v1.9.1
 
 ### Fixed

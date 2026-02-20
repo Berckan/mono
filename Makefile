@@ -107,10 +107,13 @@ install: tg5040
 	fi
 
 # Package release (zip from inside PAK_DIR so Pak Store gets flat structure)
+# Also copies bare binary for backward compat with old self-updaters (v1.7.0-v1.9.0)
 release: tg5040
 	@rm -f $(TARGET)-release.zip
 	cd $(PAK_DIR) && zip -r ../$(TARGET)-release.zip .
-	@echo "Created $(TARGET)-release.zip"
+	cp $(PAK_DIR)/bin/$(TARGET) ./$(TARGET)
+	@echo "Created $(TARGET)-release.zip + bare $(TARGET) binary"
+	@echo "Upload BOTH files to GitHub release"
 
 # Deploy via SSH (requires .env with TRIMUI_* variables)
 deploy: docker

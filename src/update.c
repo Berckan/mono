@@ -22,6 +22,8 @@
 // Temporary file paths
 #define TEMP_API_RESPONSE "/tmp/mono_update_api.json"
 #define TEMP_BINARY       "/tmp/mono_update_binary"
+#define TEMP_ZIP          "/tmp/mono_update.zip"
+#define TEMP_EXTRACT_DIR  "/tmp/mono_extract"
 #define BACKUP_SUFFIX     ".bak"
 
 // GitHub API endpoint
@@ -38,6 +40,9 @@ static int g_progress = 0;
 
 // Binary path (set at runtime)
 static char g_binary_path[512] = {0};
+
+// Whether current download is a zip (vs bare binary)
+static bool g_is_zip = false;
 
 /**
  * Compare version strings
@@ -102,6 +107,10 @@ void update_cleanup(void) {
     // Clean up temp files
     unlink(TEMP_API_RESPONSE);
     unlink(TEMP_BINARY);
+    unlink(TEMP_ZIP);
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "rm -rf '%s' 2>/dev/null", TEMP_EXTRACT_DIR);
+    system(cmd);
 }
 
 void update_check(void) {
@@ -220,24 +229,52 @@ bool update_check_complete(void) {
     }
 
     bool found_binary = false;
+    g_is_zip = false;
     int asset_count = cJSON_GetArraySize(assets);
+
+    // First pass: look for zip release (v1.9.0+ format)
     for (int i = 0; i < asset_count; i++) {
         cJSON *asset = cJSON_GetArrayItem(assets, i);
         cJSON *name = cJSON_GetObjectItem(asset, "name");
 
-        // Look for bare "mono" binary (ARM build for Trimui)
-        if (name && cJSON_IsString(name) && strcmp(name->valuestring, "mono") == 0) {
+        if (name && cJSON_IsString(name) &&
+            (strcmp(name->valuestring, "mono-release.zip") == 0 ||
+             strcmp(name->valuestring, "Mono.pak.zip") == 0)) {
             cJSON *url = cJSON_GetObjectItem(asset, "browser_download_url");
             cJSON *size_obj = cJSON_GetObjectItem(asset, "size");
 
             if (url && cJSON_IsString(url)) {
                 strncpy(g_info.download_url, url->valuestring, sizeof(g_info.download_url) - 1);
                 found_binary = true;
+                g_is_zip = true;
             }
             if (size_obj && cJSON_IsNumber(size_obj)) {
                 g_info.size_bytes = (size_t)size_obj->valuedouble;
             }
             break;
+        }
+    }
+
+    // Second pass: fallback to bare binary (v1.7.0 format)
+    if (!found_binary) {
+        for (int i = 0; i < asset_count; i++) {
+            cJSON *asset = cJSON_GetArrayItem(assets, i);
+            cJSON *name = cJSON_GetObjectItem(asset, "name");
+
+            if (name && cJSON_IsString(name) && strcmp(name->valuestring, "mono") == 0) {
+                cJSON *url = cJSON_GetObjectItem(asset, "browser_download_url");
+                cJSON *size_obj = cJSON_GetObjectItem(asset, "size");
+
+                if (url && cJSON_IsString(url)) {
+                    strncpy(g_info.download_url, url->valuestring, sizeof(g_info.download_url) - 1);
+                    found_binary = true;
+                    g_is_zip = false;
+                }
+                if (size_obj && cJSON_IsNumber(size_obj)) {
+                    g_info.size_bytes = (size_t)size_obj->valuedouble;
+                }
+                break;
+            }
         }
     }
 
@@ -270,13 +307,14 @@ bool update_download_complete(void) {
     // Download with curl, showing progress
     // Use -# for progress bar output, parse it for percentage
     // Note: -k skips SSL verification (Trimui lacks updated CA certs)
+    const char *dl_path = g_is_zip ? TEMP_ZIP : TEMP_BINARY;
     char cmd[1024];
     snprintf(cmd, sizeof(cmd),
         "curl -L -k -m 120 -A '%s' "
         "--progress-bar "
         "-o '%s' "
         "'%s' 2>&1",
-        VERSION_USER_AGENT, TEMP_BINARY, g_info.download_url);
+        VERSION_USER_AGENT, dl_path, g_info.download_url);
 
     FILE *pipe = popen(cmd, "r");
     if (!pipe) {
@@ -304,7 +342,7 @@ bool update_download_complete(void) {
 
     // Verify download
     struct stat st;
-    if (stat(TEMP_BINARY, &st) != 0) {
+    if (stat(dl_path, &st) != 0) {
         snprintf(g_error, sizeof(g_error), "Download failed - file not created");
         g_state = UPDATE_ERROR;
         return true;
@@ -314,20 +352,91 @@ bool update_download_complete(void) {
     if (g_info.size_bytes > 0 && (size_t)st.st_size != g_info.size_bytes) {
         snprintf(g_error, sizeof(g_error), "Size mismatch: got %ld, expected %zu",
                  (long)st.st_size, g_info.size_bytes);
-        unlink(TEMP_BINARY);
+        unlink(dl_path);
         g_state = UPDATE_ERROR;
         return true;
     }
 
     if (status != 0) {
         snprintf(g_error, sizeof(g_error), "Download incomplete (curl error)");
-        unlink(TEMP_BINARY);
+        unlink(dl_path);
         g_state = UPDATE_ERROR;
         return true;
     }
 
     printf("[UPDATE] Download complete: %ld bytes\n", (long)st.st_size);
     g_progress = 100;
+
+    // Extract binary from zip if needed
+    if (g_is_zip) {
+        printf("[UPDATE] Extracting binary from zip...\n");
+
+        // Clean up and create extraction dir
+        snprintf(cmd, sizeof(cmd), "rm -rf '%s' && mkdir -p '%s'", TEMP_EXTRACT_DIR, TEMP_EXTRACT_DIR);
+        system(cmd);
+
+        // Try flat structure first (v1.9.1+: bin/mono at root of zip)
+        snprintf(cmd, sizeof(cmd), "unzip -o '%s' 'bin/mono' -d '%s' 2>/dev/null", TEMP_ZIP, TEMP_EXTRACT_DIR);
+        int extract_ret = system(cmd);
+
+        if (extract_ret != 0) {
+            // Try nested structure (v1.9.0: Mono.pak/bin/mono)
+            snprintf(cmd, sizeof(cmd), "unzip -o '%s' 'Mono.pak/bin/mono' -d '%s' 2>/dev/null", TEMP_ZIP, TEMP_EXTRACT_DIR);
+            extract_ret = system(cmd);
+        }
+
+        if (extract_ret != 0) {
+            snprintf(g_error, sizeof(g_error), "Failed to extract binary from zip");
+            unlink(TEMP_ZIP);
+            snprintf(cmd, sizeof(cmd), "rm -rf '%s'", TEMP_EXTRACT_DIR);
+            system(cmd);
+            g_state = UPDATE_ERROR;
+            return true;
+        }
+
+        // Find and move the extracted binary to TEMP_BINARY
+        // Try flat path first, then nested
+        bool extracted = false;
+        char extract_path[512];
+
+        snprintf(extract_path, sizeof(extract_path), "%s/bin/mono", TEMP_EXTRACT_DIR);
+        if (stat(extract_path, &st) == 0) {
+            extracted = true;
+        }
+
+        if (!extracted) {
+            snprintf(extract_path, sizeof(extract_path), "%s/Mono.pak/bin/mono", TEMP_EXTRACT_DIR);
+            if (stat(extract_path, &st) == 0) {
+                extracted = true;
+            }
+        }
+
+        if (!extracted) {
+            snprintf(g_error, sizeof(g_error), "Binary not found in extracted zip");
+            unlink(TEMP_ZIP);
+            snprintf(cmd, sizeof(cmd), "rm -rf '%s'", TEMP_EXTRACT_DIR);
+            system(cmd);
+            g_state = UPDATE_ERROR;
+            return true;
+        }
+
+        snprintf(cmd, sizeof(cmd), "mv '%s' '%s'", extract_path, TEMP_BINARY);
+        if (system(cmd) != 0) {
+            snprintf(g_error, sizeof(g_error), "Failed to move extracted binary");
+            unlink(TEMP_ZIP);
+            snprintf(cmd, sizeof(cmd), "rm -rf '%s'", TEMP_EXTRACT_DIR);
+            system(cmd);
+            g_state = UPDATE_ERROR;
+            return true;
+        }
+
+        // Clean up zip and extract dir
+        unlink(TEMP_ZIP);
+        snprintf(cmd, sizeof(cmd), "rm -rf '%s'", TEMP_EXTRACT_DIR);
+        system(cmd);
+
+        printf("[UPDATE] Binary extracted successfully\n");
+    }
 
     // Apply the update immediately
     update_apply();
@@ -398,5 +507,6 @@ void update_reset(void) {
     g_state = UPDATE_IDLE;
     g_error[0] = '\0';
     g_progress = 0;
+    g_is_zip = false;
     memset(&g_info, 0, sizeof(g_info));
 }
