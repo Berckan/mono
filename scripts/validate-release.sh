@@ -1,10 +1,18 @@
 #!/bin/sh
 # validate-release.sh — Pre-release validation for Mono
 # Checks version sync between version.h, pak.json, and CHANGELOG.md
-# Usage: scripts/validate-release.sh [--ci]
+# Usage: scripts/validate-release.sh [--pushing]
+# --pushing: skip tag existence check (tag already created locally before push)
 # Exit code 0 = all checks pass, non-zero = release blocked
 
 set -e
+
+PUSHING=false
+for arg in "$@"; do
+    case "$arg" in
+        --pushing) PUSHING=true ;;
+    esac
+done
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -75,9 +83,11 @@ else
     fail "pak.json changelog missing v${VH_VERSION} key"
 fi
 
-# --- 6. Git tag doesn't already exist ---
+# --- 6. Git tag doesn't already exist (skip when pushing) ---
 
-if git tag -l "v${VH_VERSION}" | grep -q "v${VH_VERSION}"; then
+if [ "$PUSHING" = true ]; then
+    pass "Git tag check skipped (--pushing)"
+elif git tag -l "v${VH_VERSION}" | grep -q "v${VH_VERSION}"; then
     fail "Git tag v${VH_VERSION} already exists"
 else
     pass "Git tag v${VH_VERSION} does not exist yet"
