@@ -6,6 +6,7 @@ build/
 # Binary in pak
 Mono.pak/bin/
 Mono.pak/mono.elf
+Mono.pak/pak.json
 
 # IDE
 .idea/

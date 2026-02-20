@@ -90,6 +90,7 @@ docker:
 		make PLATFORM=tg5040 $(BUILD_DIR)/$(TARGET)
 	@mkdir -p $(PAK_DIR)/bin
 	cp $(BUILD_DIR)/$(TARGET) $(PAK_DIR)/bin/
+	cp pak.json $(PAK_DIR)/pak.json
 	@echo "Built $(TARGET) via Docker for Trimui Brick"
 
 # Clean
@@ -109,11 +110,31 @@ install: tg5040
 # Package release (zip from inside PAK_DIR so Pak Store gets flat structure)
 # Also copies bare binary for backward compat with old self-updaters (v1.7.0-v1.9.0)
 release: tg5040
+	@echo "Copying pak.json to $(PAK_DIR)/"
+	cp pak.json $(PAK_DIR)/pak.json
 	@rm -f $(TARGET)-release.zip
 	cd $(PAK_DIR) && zip -r ../$(TARGET)-release.zip .
 	cp $(PAK_DIR)/bin/$(TARGET) ./$(TARGET)
 	@echo "Created $(TARGET)-release.zip + bare $(TARGET) binary"
 	@echo "Upload BOTH files to GitHub release"
+
+# Validate release readiness (run before publish)
+validate:
+	@scripts/validate-release.sh
+
+# Full automated release: validate → build → tag → push → gh release
+publish: validate release
+	@VERSION=$$(sed -n 's/^#define VERSION "\(.*\)"/\1/p' $(SRC_DIR)/version.h) && \
+	echo "=== Publishing v$$VERSION ===" && \
+	git tag -a "v$$VERSION" -m "Release v$$VERSION" && \
+	git push origin main --tags && \
+	NOTES=$$(python3 -c "import re,sys;v=sys.argv[1];t=open('CHANGELOG.md').read();m=re.search(r'## \[.*?\] - v'+re.escape(v)+r'\n(.*?)(?=\n---|\n## \[)',t,re.DOTALL);print(m.group(1).strip() if m else 'Release v'+v)" "$$VERSION") && \
+	gh release create "v$$VERSION" \
+		$(TARGET)-release.zip \
+		$(TARGET) \
+		--title "v$$VERSION" \
+		--notes "$$NOTES" && \
+	echo "=== v$$VERSION published ==="
 
 # Deploy via SSH (requires .env with TRIMUI_* variables)
 deploy: docker
@@ -136,4 +157,4 @@ info:
 	@echo "Sources: $(SOURCES)"
 	@echo "Objects: $(OBJECTS)"
 
-.PHONY: desktop tg5040 docker clean install release deploy info
+.PHONY: desktop tg5040 docker clean install release deploy info validate publish

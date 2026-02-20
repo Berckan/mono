@@ -2,7 +2,7 @@
  * Version Information
  *
  * Centralized version definition for the Mono application.
- * Keep in sync with Mono.pak/pak.json when releasing.
+ * Keep in sync with pak.json (root) when releasing.
  */
 
 #ifndef VERSION_H
