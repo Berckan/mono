@@ -1,5 +1,14 @@
 # Changelog
 
+## [2026.02.21] - v1.9.3
+
+### Fixed
+
+- Fix(Launch): Auto-fix binary permissions on startup
+  WHY: Pak Store and Windows SD card readers strip Unix execute permissions when extracting the zip. launch.sh now runs chmod +x on all binaries before executing, so Mono works regardless of how it was installed.
+
+---
+
 ## [2026.02.20] - v1.9.2
 
 ### Fixed

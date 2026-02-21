@@ -9,6 +9,9 @@ LOG_FILE="$LOG_DIR/$APP_NAME.log"
 
 cd "$APP_DIR" || exit 1
 
+# Ensure binaries are executable (Pak Store may strip permissions)
+chmod +x launch.sh bin/* 2>/dev/null
+
 # Rotate log if over 100KB
 if [ -f "$LOG_FILE" ] && [ "$(stat -c%s "$LOG_FILE" 2>/dev/null || echo 0)" -gt 102400 ]; then
     mv "$LOG_FILE" "$LOG_FILE.old"
