@@ -54,6 +54,12 @@ static const char *MAX_BRIGHTNESS_PATHS[] = {
 #define LED_HEARTBEAT_INTERVAL_MS 10000
 #define LED_HEARTBEAT_BLINK_MS 200
 
+// Below this the panel reads as black, so a value under it is never a
+// brightness the user chose: it is the screen being off. Remembering one as if
+// it were a preference is how Mono used to trap itself, see remember_lcd_brightness().
+#define LCD_BRIGHTNESS_MIN_VISIBLE 8
+#define LCD_BRIGHTNESS_FALLBACK 64
+
 // State
 static int g_saved_brightness = -1;
 static int g_saved_brightness_lcd = 255;  // For /dev/disp control (0-255)
@@ -154,6 +160,36 @@ static int disp_get_brightness(void) {
     return ret;
 }
 
+/**
+ * Remember the panel's current brightness as the value to come back to.
+ *
+ * Anything under LCD_BRIGHTNESS_MIN_VISIBLE is refused, because it is not a
+ * preference: it is the screen sitting off. Mono turns the panel down to 0 for
+ * pocket mode and dimming, and if it dies before its cleanup runs (SIGKILL, a
+ * yanked battery), that 0 is still in the hardware when the next instance
+ * starts. Adopting it made every launch from then on paint a black screen, and
+ * since there is no in-app brightness control there was no way out of it
+ * except rebooting the device.
+ *
+ * @return true if the reading was kept
+ */
+static bool remember_lcd_brightness(void) {
+    int current = disp_get_brightness();
+    if (current < LCD_BRIGHTNESS_MIN_VISIBLE) return false;
+
+    g_saved_brightness_lcd = current;
+    return true;
+}
+
+/**
+ * The brightness to restore, guaranteed to be one you can see.
+ */
+static int lcd_restore_value(void) {
+    return (g_saved_brightness_lcd >= LCD_BRIGHTNESS_MIN_VISIBLE)
+               ? g_saved_brightness_lcd
+               : LCD_BRIGHTNESS_FALLBACK;
+}
+
 int screen_init(void) {
     // Find brightness control path (for dim functionality)
     g_brightness_path = find_brightness_path(BRIGHTNESS_PATHS);
@@ -183,12 +219,23 @@ int screen_init(void) {
     if (g_disp_fd < 0) {
         fprintf(stderr, "[SCREEN] Cannot open %s (expected on desktop)\n", DISP_DEV);
     } else {
-        // Get current LCD brightness
+        // Get current LCD brightness. If the panel is sitting at or near zero,
+        // a previous run died before restoring it: fall back rather than
+        // inherit a black screen.
         int current = disp_get_brightness();
-        if (current >= 0) {
+        if (current >= LCD_BRIGHTNESS_MIN_VISIBLE) {
             g_saved_brightness_lcd = current;
+            printf("[SCREEN] /dev/disp opened, LCD brightness=%d\n", g_saved_brightness_lcd);
+        } else {
+            g_saved_brightness_lcd = LCD_BRIGHTNESS_FALLBACK;
+            disp_set_brightness(g_saved_brightness_lcd);
+            // Say which of the two it was: a failed read and a dark panel are
+            // different problems, and a log line that guesses wrong sends the
+            // next person debugging in the wrong direction.
+            fprintf(stderr, "[SCREEN] /dev/disp opened, %s, reset to %d\n",
+                    current < 0 ? "could not read brightness" : "panel was dark",
+                    g_saved_brightness_lcd);
         }
-        printf("[SCREEN] /dev/disp opened, LCD brightness=%d\n", g_saved_brightness_lcd);
     }
 
     printf("[SCREEN] Init: sysfs=%s, sysfs_brightness=%d, max=%d\n",
@@ -317,10 +364,7 @@ void screen_off(void) {
     }
 
     // Save current LCD brightness before turning off
-    int current = disp_get_brightness();
-    if (current > 0) {
-        g_saved_brightness_lcd = current;
-    }
+    remember_lcd_brightness();
 
     // Turn off LEDs (pocket mode)
     leds_save_and_off();
@@ -344,7 +388,7 @@ void screen_on(void) {
     }
 
     // Restore brightness
-    int restore_value = (g_saved_brightness_lcd > 0) ? g_saved_brightness_lcd : 255;
+    int restore_value = lcd_restore_value();
 
     if (disp_set_brightness(restore_value) == 0) {
         g_is_off = false;
@@ -412,10 +456,7 @@ void screen_system_suspend(void) {
 
     // Save brightness before suspend
     if (g_disp_fd >= 0) {
-        int current = disp_get_brightness();
-        if (current > 0) {
-            g_saved_brightness_lcd = current;
-        }
+        remember_lcd_brightness();
     }
 
     // Trigger system suspend
@@ -430,7 +471,7 @@ void screen_system_suspend(void) {
 
     // After resume, restore brightness
     printf("[SCREEN] Resumed from suspend\n");
-    if (g_disp_fd >= 0 && g_saved_brightness_lcd > 0) {
-        disp_set_brightness(g_saved_brightness_lcd);
+    if (g_disp_fd >= 0) {
+        disp_set_brightness(lcd_restore_value());
     }
 }

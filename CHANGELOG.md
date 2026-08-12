@@ -1,5 +1,14 @@
 # Changelog
 
+## [2026.08.13] - v1.9.5
+
+### Fixed
+
+- Fix(Screen): Black screen on every launch after an unclean exit left the panel dark
+  WHY: Mono turns LCD brightness down to 0 for pocket mode, and it reads whatever the panel is at when it starts as the brightness to come back to. If it died before its cleanup ran, that 0 was still in the hardware, so the next launch adopted "off" as the user's preference and painted a black screen. Pocket mode then saved the same value again, which made it stick across launches, and since Mono has no brightness control of its own there was no way out except rebooting the device. Any reading below 8 out of 255 is now refused: it means the screen is off, not that someone chose it. When the panel starts out dark, Mono resets it to 64 and says so in the log.
+
+---
+
 ## [2026.08.12] - v1.9.4
 
 ### Fixed

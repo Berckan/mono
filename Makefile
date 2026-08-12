@@ -91,6 +91,13 @@ docker:
 	@mkdir -p $(PAK_DIR)/bin
 	cp $(BUILD_DIR)/$(TARGET) $(PAK_DIR)/bin/
 	cp pak.json $(PAK_DIR)/pak.json
+# $(BUILD_DIR) is shared by the desktop and tg5040 targets and neither cleans
+# it, so a `make desktop` leaves host objects behind that this target will
+# happily link or copy. That has already produced a Mach-O binary sitting in
+# the pak, one zip away from shipping to users. Refuse to hand it over.
+	@file $(PAK_DIR)/bin/$(TARGET) | grep -q "ARM aarch64" || \
+		{ echo "ABORT: $(PAK_DIR)/bin/$(TARGET) is not an ARM binary. Run 'make clean' first."; \
+		  file $(PAK_DIR)/bin/$(TARGET); rm -f $(PAK_DIR)/bin/$(TARGET); exit 1; }
 	@echo "Built $(TARGET) via Docker for Trimui Brick"
 
 # Clean
