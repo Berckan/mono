@@ -31,3 +31,6 @@ CLAUDE.md
 # Development test files
 test_disp
 test_disp.c
+
+# Bare release binary (make release)
+/mono

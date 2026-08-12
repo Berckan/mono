@@ -171,10 +171,19 @@ static void json_escape_string(const char *src, char *dest, size_t size) {
 
 int state_init(void) {
     // Build data directory path
+    // HOME is not guaranteed: depending on how the frontend launches the pak,
+    // the environment can arrive stripped. Bailing here left g_state_path empty
+    // and every later save reported `Failed to open  for writing`, naming no
+    // file at all. On tg5040 the account is always root, so fall back to it.
     const char *home = getenv("HOME");
-    if (!home) {
+    if (!home || !home[0]) {
+#ifdef __APPLE__
         fprintf(stderr, "[STATE] HOME not set\n");
         return -1;
+#else
+        home = "/root";
+        fprintf(stderr, "[STATE] HOME not set, falling back to %s\n", home);
+#endif
     }
 
     snprintf(g_data_dir, sizeof(g_data_dir), "%s%s", home, DATA_DIR_BASE);
@@ -196,6 +205,11 @@ void state_cleanup(void) {
 
 bool state_save(const AppStateData *data) {
     if (!data) return false;
+
+    if (!g_state_path[0]) {
+        fprintf(stderr, "[STATE] Not initialized, skipping save\n");
+        return false;
+    }
 
     FILE *f = fopen(g_state_path, "w");
     if (!f) {

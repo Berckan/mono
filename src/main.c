@@ -1867,6 +1867,13 @@ int main(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
 
+    // launch.sh pipes our output to a log, so stdout is a pipe and glibc gives
+    // it 4KB block buffering. On a hang, everything still in that buffer is
+    // lost, and the log stops several lines before the code actually did,
+    // which sends every bug report chasing the wrong line. Line buffering
+    // costs nothing here and makes the log say where we really stopped.
+    setvbuf(stdout, NULL, _IOLBF, 0);
+
     printf("Mono - Starting...\n");
 
     // Initialize SDL

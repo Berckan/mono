@@ -16,6 +16,10 @@
 #include <string.h>
 #include <stdbool.h>
 #include <sys/time.h>
+#ifndef __APPLE__
+#include <dirent.h>
+#include <ctype.h>
+#endif
 
 // Sysfs paths for battery on Trimui Brick (AXP2202 PMIC)
 #define BATTERY_CAPACITY_PATH "/sys/class/power_supply/axp2202-battery/capacity"
@@ -165,6 +169,43 @@ static void refresh_volume_if_needed(void) {
     }
 }
 
+#ifndef __APPLE__
+/**
+ * Is bluetoothd running?
+ *
+ * MUST be checked before shelling out to bluetoothctl. With no daemon to talk
+ * to, `bluetoothctl info` never returns: it waits forever for a controller,
+ * and popen() blocks the caller with it. Since sysinfo_init() runs before the
+ * render loop, that freezes the whole app on a black screen with no log and no
+ * way out but a hard reset. Redirecting stdin does NOT help (verified on a
+ * Brick, tg5040/NextUI); busybox has no `timeout` applet to bound it either.
+ *
+ * Scans /proc for a process named bluetoothd, in C rather than by shelling out
+ * to pgrep, so the guard itself costs no fork on a 5s refresh cycle.
+ */
+static bool is_bluetoothd_running(void) {
+    DIR *proc = opendir("/proc");
+    if (!proc) return false;
+
+    bool found = false;
+    struct dirent *ent;
+    while (!found && (ent = readdir(proc)) != NULL) {
+        if (!isdigit((unsigned char)ent->d_name[0])) continue;
+
+        char comm_path[sizeof("/proc//comm") + sizeof(ent->d_name)];
+        snprintf(comm_path, sizeof(comm_path), "/proc/%s/comm", ent->d_name);
+
+        char comm[32];
+        if (read_sysfs_string(comm_path, comm, sizeof(comm)) == 0) {
+            found = (strcmp(comm, "bluetoothd") == 0);
+        }
+    }
+
+    closedir(proc);
+    return found;
+}
+#endif
+
 /**
  * Refresh connectivity (WiFi + Bluetooth) cache if expired
  */
@@ -180,16 +221,21 @@ static void refresh_connectivity_if_needed(void) {
             g_cached_wifi = false;
         }
 
-        // Bluetooth: check if any device is connected
-        FILE *pipe = popen("bluetoothctl info 2>/dev/null | grep -c 'Connected: yes'", "r");
-        if (pipe) {
-            char buf[16];
-            if (fgets(buf, sizeof(buf), pipe)) {
-                g_cached_bluetooth = (atoi(buf) > 0);
-            }
-            pclose(pipe);
-        } else {
+        // Bluetooth: check if any device is connected.
+        // No daemon means nothing can be connected anyway, and asking would hang.
+        if (!is_bluetoothd_running()) {
             g_cached_bluetooth = false;
+        } else {
+            FILE *pipe = popen("bluetoothctl info 2>/dev/null | grep -c 'Connected: yes'", "r");
+            if (pipe) {
+                char buf[16];
+                if (fgets(buf, sizeof(buf), pipe)) {
+                    g_cached_bluetooth = (atoi(buf) > 0);
+                }
+                pclose(pipe);
+            } else {
+                g_cached_bluetooth = false;
+            }
         }
 #endif
         g_last_connectivity_refresh = now;

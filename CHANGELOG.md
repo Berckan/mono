@@ -1,5 +1,20 @@
 # Changelog
 
+## [2026.08.12] - v1.9.4
+
+### Fixed
+
+- Fix(Sysinfo): Don't hang forever on a black screen when Bluetooth is off
+  WHY: The connectivity check shelled out to `bluetoothctl info`, which never returns when `bluetoothd` isn't running: it waits for a controller that will never appear. That call happens in `sysinfo_init()`, before the render loop starts, so the app froze on a black screen with the process still alive and no way out but a hard reset. Anyone who had never turned Bluetooth on, which is most people on a fresh install, hit it every single launch. Mono now checks that the daemon is alive before asking it anything. Redirecting stdin does not help, and busybox has no `timeout` applet to bound the call.
+
+- Fix(Logging): Line-buffer stdout so the log says where we actually stopped
+  WHY: `launch.sh` pipes our output to a file, which switches stdout to 4KB block buffering. On a hang, everything still sitting in that buffer is lost, so the log ended several lines before the code did and pointed at the wrong function. Reports of the freeze above all named `screen_init()`, which had already finished.
+
+- Fix(State): Fall back to /root when HOME is unset
+  WHY: Depending on how the frontend launches the pak, the environment can arrive without HOME. `state_init()` gave up there and left the state path empty, so every later save failed with `Failed to open  for writing`, naming no file at all. Settings and resume position were silently lost for the whole session.
+
+---
+
 ## [2026.02.21] - v1.9.3
 
 ### Fixed
